@@ -1,0 +1,7 @@
+{
+  "task_id": "task-tkinter-gui",
+  "task_description": "Create a complete Tkinter GUI for POSFramework with dark theme, tab-based navigation (Recon, Attack, MITM, Credentials, Printers, Settings), real-time tables, start/stop buttons, log panel, and status bar. All operations threaded for responsive UI.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null
+}

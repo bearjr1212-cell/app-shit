@@ -1,0 +1,43 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Create complete Tkinter GUI for POSFramework at posframework/gui.py with dark professional theme, tab-based navigation, real-time tables, start/stop controls, log panel, and status bar. Add gui_main.py launcher and integrate gui mode into __main__.py.",
+  "status": "in_progress",
+  "steps": [
+    "Create posframework/gui.py with a full Tkinter-based GUI application class (POSFrameworkGUI) featuring: 1) Dark theme color scheme (dark grey background #1e1e1e, accent colors for different states), 2) Main window with title 'POSFramework v2.1.0 - WiFi Reconnaissance & Attack Suite'",
+    "Implement tab-based navigation using ttk.Notebook with 6 tabs: Recon, Attack, MITM, Credentials, Printers, Settings",
+    "Recon Tab: Interface selector dropdown (populated from config DEFAULT_MONITOR_IFACE/DEFAULT_AP_IFACE), channel selection (2.4GHz/5GHz/Both checkboxes), Start/Stop Recon buttons, real-time Treeview table showing discovered APs (columns: BSSID, SSID, Channel, Security, RSSI, Vendor, POS), another Treeview for discovered Clients (columns: MAC, Vendor, Associated AP, RSSI, POS). Add a refresh timer that polls POSDatabase.get_stats() every 2 seconds.",
+    "Attack Tab: Target BSSID entry (or 'Auto' button to use strongest), attack module checkboxes (Deauth, Beacons, KARMA, Rogue AP, AP Clone, KRACK, DoS, Client Isolation), DoS mode dropdown (cts_flood/beacon_exhaust/qos_null/fragment), RSSI limit slider (-100 to -30), Start Attack / Stop Attack buttons. Show attack status and active modules in a frame.",
+    "MITM Tab: Target IP entry, Gateway IP entry, module checkboxes (ARP Poison, SSL Strip, DNS Spoof, HTTP Inject), DNS spoof target domains text entry, Start/Stop MITM buttons, live traffic table (Treeview with Source, Dest, Protocol, Data columns), intercepted packet counter.",
+    "Credentials Tab: Real-time Treeview table auto-populated from database credentials table (columns: Timestamp, Source IP, Username, Password, URL, Protocol). Add Export button to save to JSON. Add Clear button. Show total credential count.",
+    "Printers Tab: Start/Stop Printer Recon button, discovered printers Treeview (IP, Model, Manufacturer, Hostname, Firmware, Default Creds, Vulns), intercepted print jobs Treeview (Timestamp, Printer IP, Source, Document, Type, Pages), printer credentials Treeview.",
+    "Settings Tab: Interface configuration (Monitor interface text entry, AP interface text entry), Database path entry with Browse button, Auto-refresh interval spinbox, Log level dropdown (DEBUG/INFO/WARNING/ERROR), Theme toggle (Dark/Light - but default dark), About section showing version 2.1.0.",
+    "Log Output Panel: Place a scrolled Text widget at the bottom of the window (below tabs, ~8 lines visible) that captures all logging output via a custom logging.Handler that writes to the text widget. Add Clear Log button. Auto-scroll to bottom. Use monospace font. Color-code by log level (red=ERROR, yellow=WARNING, green=INFO, cyan=DEBUG).",
+    "Status Bar: Place at very bottom showing: Connection status, Active modules count, APs found, Clients found, Credentials captured, Uptime timer. Update every second.",
+    "Threading: All engine start/stop operations must run in background threads (threading.Thread with daemon=True) so the GUI stays responsive. Use root.after() for periodic UI updates. Use queue.Queue for thread-safe communication between engine threads and the GUI main thread.",
+    "Wire up the GUI to the actual framework modules: import and instantiate POSDatabase, ReconEngine, AttackOrchestrator, DeauthEngine, KnownBeaconsEngine, RogueAPEngine, KARMAEngine, MITMEngine, SSLStripper, DNSSpoofEngine, CredentialHarvester, HandshakeCapture, SignalTargeting, NetworkDisruption, PostAttackAnalyzer, APCloneEngine, KRACKEngine, WiFiDoSEngine, ClientIsolationEngine, PrinterRecon, IPPScanner, PrintJobInterceptor, PrinterCredentialHarvester. Handle ImportError gracefully for scapy (show warning in log panel if not available).",
+    "Create posframework/gui_main.py as a simple launcher: 'from posframework.gui import main; main()' with if __name__ == '__main__' guard.",
+    "Modify posframework/__main__.py to add a 'gui' mode to the argparse subparsers that imports and launches the GUI (from .gui import main as gui_main; gui_main())."
+  ],
+  "acceptance_criteria": [
+    "posframework/gui.py exists and passes ast.parse() validation (syntactically valid Python)",
+    "posframework/gui_main.py exists and passes ast.parse() validation",
+    "posframework/__main__.py has a 'gui' subcommand that launches the GUI",
+    "The GUI code imports tkinter, ttk, and all relevant posframework modules",
+    "The GUI has 6 tabs (Recon, Attack, MITM, Credentials, Printers, Settings)",
+    "All engine operations are wrapped in threading to keep GUI responsive",
+    "A logging handler routes log output to the GUI text widget",
+    "Status bar updates with real-time stats from the database",
+    "Dark theme colors are applied to all widgets"
+  ],
+  "verification": [
+    "Run: python3 -c \"import ast; ast.parse(open('posframework/gui.py').read()); print('gui.py: VALID')\"",
+    "Run: python3 -c \"import ast; ast.parse(open('posframework/gui_main.py').read()); print('gui_main.py: VALID')\"",
+    "Run: python3 -c \"import ast; ast.parse(open('posframework/__main__.py').read()); print('__main__.py: VALID')\"",
+    "Run: grep -c 'ttk.Notebook\\|Notebook' posframework/gui.py to confirm tab widget usage",
+    "Run: grep -c 'threading.Thread' posframework/gui.py to confirm threading usage",
+    "Run: grep -c 'class.*Handler\\|logging.Handler' posframework/gui.py to confirm custom log handler"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

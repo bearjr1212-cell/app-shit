@@ -202,6 +202,9 @@ def build_parser():
     terminal.add_argument("-a", "--ap-interface", default=DEFAULT_AP_IFACE)
     terminal.add_argument("-d", "--db", default=DB_NAME, help="Database file path")
 
+    # ── GUI mode ──────────────────────────────────────────────────────────────
+    sub.add_parser("gui", help="Launch Tkinter graphical interface")
+
     return parser
 
 
@@ -329,6 +332,11 @@ def main():
         db = POSDatabase(args.db)
         ui = MultiTerminalInterface(args.interface, args.ap_interface, db)
         ui.run()
+
+    elif args.mode == "gui":
+        # Tkinter graphical interface
+        from .gui import main as gui_main
+        gui_main()
 
 
 if __name__ == "__main__":
