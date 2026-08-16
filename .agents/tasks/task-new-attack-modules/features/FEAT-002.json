@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "feat",
   "description": "Add printer exploitation modules: Printer Discovery, IPP Scanner, Print Job Interception, Printer Credential Harvester, and database schema additions",
-  "status": "pending",
+  "status": "in_progress",
   "steps": [
     "1. Create posframework/printer_recon.py - PrinterRecon class: (a) Passive scanning for network printers via mDNS/LLMNR broadcasts, (b) Identify printer models from HTTP banners and SNMP, (c) Extract printer IP, hostname, serial numbers, (d) Detect printer vulnerabilities (outdated firmware), (e) Map printer types (HP, Canon, Xerox, Brother). Class: __init__(interface, db), start(), stop(), _scan_mdns(), _scan_snmp(), _fingerprint_http(), get_printers().",
     "2. Create posframework/ipp_scanner.py - IPPScanner class: (a) Port 631 scanning and fingerprinting, (b) Extract printer capabilities and document formats, (c) Enumerate print queues and job history, (d) Identify default credentials, (e) Detect IPP protocol version vulnerabilities. Class: __init__(target_ip, db), scan(), get_capabilities(), enumerate_queues(), check_default_creds().",
