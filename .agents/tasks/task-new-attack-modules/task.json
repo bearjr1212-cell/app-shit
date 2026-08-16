@@ -1,0 +1,7 @@
+{
+  "task_id": "task-new-attack-modules",
+  "task_description": "Add new attack modules: WiFi advanced attacks (AP auto-clone, KRACK, DoS, Client Isolation) and printer exploitation (discovery, IPP scanner, print job interception, credential harvester). Integrate all into orchestrator with database schema and CLI options.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}
