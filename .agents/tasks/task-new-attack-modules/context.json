@@ -1,0 +1,25 @@
+{
+  "project_type": "Python WiFi reconnaissance and attack framework",
+  "language": "Python",
+  "build_system": "setup.py with no build step required",
+  "test_framework": "No test suite present - validation by AST syntax check",
+  "build_command": "python3 -c \"import ast; [ast.parse(open(f'posframework/{m}.py').read()) for m in ['recon','karma','beacons','mitm','dns_spoof','ssl_strip','orchestrator','__main__','deauth','signal_targeting','database','rogueap','config']]\"",
+  "test_command": "python3 -c \"import ast; import os; files=[f for f in os.listdir('posframework') if f.endswith('.py')]; [ast.parse(open(f'posframework/{f}').read()) for f in files]\"",
+  "verification_instructions": "Run AST parse on all .py files in posframework/",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "cd /projects/sandbox/app-shit",
+  "environment_constraints": "INTEGRATIONS_ONLY network - no pip install, no Docker. Use pre-installed Python for AST/syntax validation only.",
+  "contribution_requirements": "Commit to existing branch fix/complete-audit-fixes and push. PR #1 is already open.",
+  "key_patterns": "Each module is a class with start()/stop() methods. Uses scapy for packet manipulation. Logging via config.log. Cross-platform via IS_WINDOWS/IS_LINUX flags. Database access via POSDatabase instance. Orchestrator integrates all modules. Threads are daemon=True with join(timeout=5) in stop().",
+  "relevant_files": [
+    "posframework/orchestrator.py",
+    "posframework/database.py",
+    "posframework/config.py",
+    "posframework/__init__.py",
+    "posframework/__main__.py",
+    "posframework/deauth.py",
+    "posframework/mitm.py",
+    "posframework/recon.py"
+  ],
+  "directory_structure": "posframework/ contains all modules. Each module is a single .py file with one or more classes. config.py has shared constants/logging. __main__.py is the CLI entry point. orchestrator.py coordinates all attack modules."
+}

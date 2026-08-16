@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Add advanced WiFi attack modules: AP Auto-Clone, KRACK attack, DoS (CTS/RTS/Beacon/QoS), and Client Isolation/Fragmentation",
+  "status": "completed",
+  "steps": [
+    "1. Create posframework/ap_clone.py - APCloneEngine class that: (a) monitors for target AP's SSID after deauth, (b) automatically clones SSID/channel/security settings, (c) handles WPA3 transition mode (downgrade to WPA2), (d) auto-channel hops when legitimate AP returns. Class pattern: __init__(interface, db, target_bssid), start(), stop(), _clone_loop(), _detect_ap_return(), _switch_channel(). Linux only.",
+    "2. Create posframework/krack.py - KRACKEngine class for Key Reinstallation attacks: (a) CVE-2017-13077/13078 exploitation, (b) Force key reinstallation by replaying message 3, (c) Reset nonce/replay counters, (d) Implement packet replay after successful KRACK. Class: __init__(interface, target_client, target_bssid), start(), stop(), _monitor_handshake(), _replay_msg3(), _inject_replayed_packets(). Linux only, requires monitor mode.",
+    "3. Create posframework/dos_wifi.py - WiFiDoSEngine class with multiple attack modes: (a) CTS/RTS frame flooding (reserve channel), (b) Beacon rate exhaustion (flood beacons to exhaust AP processing), (c) QoS null frame DoS (force station disconnect), (d) Fragmentation attack (802.11 fragment overflow). Class: __init__(interface), start(mode='cts_flood'), stop(), _cts_flood(), _beacon_exhaust(), _qos_null_dos(), _fragment_overflow(). Has DoSMode enum.",
+    "4. Create posframework/client_isolation.py - ClientIsolationEngine class: (a) Disassociate clients (different from deauth - uses reason code 8), (b) Cause AP-to-client communication breakdown, (c) Force clients into handoff mode, (d) More subtle than deauth floods (lower frame rate, varied reason codes). Class: __init__(interface, db), start(), stop(), _disassoc_loop(), _force_handoff(), add_target(client_mac, bssid)."
+  ],
+  "acceptance_criteria": [
+    "All 4 new files pass AST syntax validation",
+    "Each class follows existing pattern: __init__, start(), stop(), daemon thread, logging via config.log",
+    "ap_clone.py has APCloneEngine with WPA3 transition mode detection",
+    "krack.py has KRACKEngine with message 3 replay logic",
+    "dos_wifi.py has WiFiDoSEngine with 4 attack modes",
+    "client_isolation.py has ClientIsolationEngine with disassociation and handoff"
+  ],
+  "verification": [
+    "Run: python3 -c \"import ast; [ast.parse(open(f'posframework/{m}.py').read()) for m in ['ap_clone','krack','dos_wifi','client_isolation']]\"",
+    "Run: grep -c 'class.*Engine' posframework/ap_clone.py posframework/krack.py posframework/dos_wifi.py posframework/client_isolation.py"
+  ],
+  "blocked_reason": null,
+  "findings": "All 4 modules created and pass AST validation. Each follows the established pattern: __init__, start(), stop(), daemon threads, join(timeout=5), exception handling with log.error. All modules are Linux-only with IS_WINDOWS guards."
+}

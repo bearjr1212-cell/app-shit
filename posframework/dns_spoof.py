@@ -15,7 +15,7 @@ from collections import defaultdict
 from scapy.all import IP, UDP, DNS, DNSQR, DNSRR, sniff, send, ARP, sr1
 from scapy.layers.inet import Ether
 
-from .config import NETWORK_GW_IP, log
+from .config import NETWORK_GW_IP, IS_WINDOWS, log
 
 
 class DNSSpoofEngine:
@@ -145,6 +145,10 @@ class DNSSpoofEngine:
 
     def start(self):
         """Start DNS spoofing."""
+        if IS_WINDOWS:
+            log.warning("DNS spoofing has limited support on Windows.")
+            log.warning("Raw packet injection may require Npcap with admin privileges.")
+
         self.running = True
         log.info(f"Starting DNS spoof on {self.interface}")
 

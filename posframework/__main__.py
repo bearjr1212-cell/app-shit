@@ -68,9 +68,19 @@ def verify_interface(iface):
             log.error("Npcap not found. Install from https://npcap.com/")
             sys.exit(1)
         log.info(f"Interface: {iface} (Npcap detected)")
-        
-        # Check for monitor mode support
-        if not check_npcap_monitor_support():
+
+        # Check for monitor mode support and enable if available
+        if check_npcap_monitor_support():
+            try:
+                manager = WindowsMonitorManager(iface)
+                if manager.enable_monitor_mode():
+                    log.info(f"Monitor mode enabled on {iface}")
+                else:
+                    log.warning("Monitor mode could not be enabled, using native capture mode")
+            except Exception as e:
+                log.warning(f"Monitor mode setup failed: {e}")
+                log.warning("Continuing with native capture mode")
+        else:
             log.warning("Monitor mode may be limited on this interface")
     else:
         try:
@@ -147,6 +157,13 @@ def build_parser():
     attack.add_argument("--rssi-limit", type=int, default=-80, help="Min RSSI for deauth targets")
     attack.add_argument("--test-creds", action="store_true", help="Test captured credentials")
     attack.add_argument("-t", "--target", default=None, help="Target BSSID (auto if omitted)")
+    attack.add_argument("--enable-ap-clone", action="store_true", help="Enable AP auto-clone after deauth")
+    attack.add_argument("--enable-krack", action="store_true", help="Enable KRACK attack on captured handshakes")
+    attack.add_argument("--enable-dos", action="store_true", help="Enable WiFi DoS attack")
+    attack.add_argument("--dos-mode", choices=["cts_flood", "beacon_exhaust", "qos_null", "fragment"],
+                        default="cts_flood", help="DoS attack mode")
+    attack.add_argument("--enable-client-isolation", action="store_true", help="Enable subtle client isolation")
+    attack.add_argument("--enable-printer-attacks", action="store_true", help="Enable printer exploitation modules")
 
     # ── Full mode ─────────────────────────────────────────────────────────────
     full = sub.add_parser("full", help="Full auto: recon -> attack")
@@ -158,6 +175,13 @@ def build_parser():
     full.add_argument("--no-karma", action="store_true")
     full.add_argument("--rssi-limit", type=int, default=-80)
     full.add_argument("--test-creds", action="store_true")
+    full.add_argument("--enable-ap-clone", action="store_true", help="Enable AP auto-clone after deauth")
+    full.add_argument("--enable-krack", action="store_true", help="Enable KRACK attack on captured handshakes")
+    full.add_argument("--enable-dos", action="store_true", help="Enable WiFi DoS attack")
+    full.add_argument("--dos-mode", choices=["cts_flood", "beacon_exhaust", "qos_null", "fragment"],
+                      default="cts_flood", help="DoS attack mode")
+    full.add_argument("--enable-client-isolation", action="store_true", help="Enable subtle client isolation")
+    full.add_argument("--enable-printer-attacks", action="store_true", help="Enable printer exploitation modules")
 
     # ── Analyze mode ──────────────────────────────────────────────────────────
     analyze = sub.add_parser("analyze",
@@ -240,6 +264,12 @@ def main():
             enable_isolation_check=not getattr(args, 'no_isolation_check', False),
             signal_rssi_limit=args.rssi_limit,
             test_credentials=getattr(args, 'test_creds', False),
+            enable_ap_clone=getattr(args, 'enable_ap_clone', False),
+            enable_krack=getattr(args, 'enable_krack', False),
+            enable_dos=getattr(args, 'enable_dos', False),
+            dos_mode=getattr(args, 'dos_mode', None),
+            enable_client_isolation=getattr(args, 'enable_client_isolation', False),
+            enable_printer_attacks=getattr(args, 'enable_printer_attacks', False),
         )
         if orchestrator.start():
             while orchestrator.running:
@@ -258,6 +288,12 @@ def main():
             enable_isolation_check=True,
             signal_rssi_limit=args.rssi_limit,
             test_credentials=getattr(args, 'test_creds', False),
+            enable_ap_clone=getattr(args, 'enable_ap_clone', False),
+            enable_krack=getattr(args, 'enable_krack', False),
+            enable_dos=getattr(args, 'enable_dos', False),
+            dos_mode=getattr(args, 'dos_mode', None),
+            enable_client_isolation=getattr(args, 'enable_client_isolation', False),
+            enable_printer_attacks=getattr(args, 'enable_printer_attacks', False),
         )
         if orchestrator.start():
             while orchestrator.running:

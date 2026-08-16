@@ -99,7 +99,8 @@ class ReconEngine:
         self._verbose = False
         # Packet type counters for summary stats
         self._pkt_stats = defaultdict(int)
-        
+        # Signal targeting integration
+        self.signal_targeting = None
         # Monitor mode manager
         self._monitor_manager = None
 
@@ -124,7 +125,10 @@ class ReconEngine:
     def _hop_channels(self):
         idx = 0
         while self.running:
-            self._set_channel(self.channels[idx])
+            try:
+                self._set_channel(self.channels[idx])
+            except Exception as e:
+                log.error(f"Channel hop failed: {e}")
             idx = (idx + 1) % len(self.channels)
             time.sleep(CHANNEL_HOP_INTERVAL)
 
@@ -162,6 +166,22 @@ class ReconEngine:
         return False
 
     def _identify_eapol_message(self, eapol_raw: bytes) -> int:
+        """
+        Identify EAPOL-Key message number from raw EAPOL frame.
+
+        Handles:
+          - Standard 4-way handshake (messages 1-4)
+          - Group Key handshake (messages 5-6 for GK M1/M2)
+          - FT reassociation handshakes (same bit patterns as standard)
+
+        Key Info field bits (IEEE 802.11-2020 Section 12.7.2):
+          Bit 3: Pairwise (1=pairwise, 0=group)
+          Bit 6: Install
+          Bit 7: Key Ack
+          Bit 8: Key MIC
+          Bit 9: Secure
+          Bit 12: Encrypted Key Data
+        """
         if len(eapol_raw) < 10:
             return 0
         key_info = struct.unpack(">H", eapol_raw[5:7])[0]
@@ -169,12 +189,33 @@ class ReconEngine:
         key_mic = (key_info >> 8) & 1
         secure = (key_info >> 9) & 1
         install = (key_info >> 6) & 1
+        pairwise = (key_info >> 3) & 1
+        encrypted = (key_info >> 12) & 1
+
+        # Extract key data length for additional validation
+        key_data_length = 0
+        if len(eapol_raw) >= 99:
+            key_data_length = struct.unpack(">H", eapol_raw[97:99])[0]
+
+        # Group Key Handshake (2-way, pairwise bit = 0)
+        if not pairwise:
+            if key_ack and key_mic and secure:
+                return 5  # Group Key Message 1 (AP -> Client)
+            if not key_ack and key_mic and secure:
+                return 6  # Group Key Message 2 (Client -> AP)
+            return 0
+
+        # Standard 4-way handshake (also covers FT reassociation)
+        # Message 1: AP sends ANonce (Ack set, no MIC, no Install)
         if key_ack and not key_mic:
             return 1
+        # Message 2: Client sends SNonce (MIC set, no Ack, not Secure)
         if not key_ack and key_mic and not secure:
             return 2
+        # Message 3: AP sends GTK (Ack + MIC + Install + Secure + Encrypted)
         if key_ack and key_mic and install:
             return 3
+        # Message 4: Client confirms (MIC + Secure, no Ack, no Install)
         if not key_ack and key_mic and secure:
             return 4
         return 0
@@ -311,6 +352,9 @@ class ReconEngine:
         vendor = self._get_vendor(client_mac)
         pos_flag = is_pos_vendor(vendor)
         self.db.update_client(client_mac, vendor, rssi, pos_flag, probed_ssid=probed_ssid or None)
+        # Pass RSSI to signal targeting
+        if self.signal_targeting:
+            self.signal_targeting.add_sample(client_mac, None, rssi)
         if pos_flag:
             log.info(f"POS Probe: {vendor} | {client_mac} | '{probed_ssid}'")
         elif self._verbose:
@@ -359,7 +403,10 @@ class ReconEngine:
         if msg_num == 0:
             return
         key = (client_mac, bssid)
-        self._eapol_tracker[key].add(msg_num)
+        # Only track pairwise handshake messages (1-4) in the 4-way tracker
+        # Group key messages (5, 6) are logged but not added to the tracker
+        if msg_num <= 4:
+            self._eapol_tracker[key].add(msg_num)
         self.db.log_eapol(client_mac, bssid, msg_num)
         vendor = self._get_vendor(client_mac)
         captured = sorted(self._eapol_tracker[key])
@@ -379,6 +426,9 @@ class ReconEngine:
         vendor = self._get_vendor(client_mac)
         pos_flag = is_pos_vendor(vendor)
         self.db.update_client(client_mac, vendor, rssi, pos_flag, associated_bssid=bssid)
+        # Pass RSSI to signal targeting
+        if self.signal_targeting:
+            self.signal_targeting.add_sample(client_mac, bssid, rssi)
         if pos_flag:
             log.info(f"POS Association: {vendor} | {client_mac} -> {bssid}")
 
@@ -390,6 +440,9 @@ class ReconEngine:
         vendor = self._get_vendor(client_mac)
         pos_flag = is_pos_vendor(vendor)
         self.db.update_client(client_mac, vendor, rssi, pos_flag, associated_bssid=bssid)
+        # Pass RSSI to signal targeting
+        if self.signal_targeting:
+            self.signal_targeting.add_sample(client_mac, bssid, rssi)
         
         # Extract SSID from data frame for verbose output
         if self._verbose:
@@ -493,6 +546,10 @@ class ReconEngine:
             teardown_monitor_mode(self._monitor_manager)
             self._monitor_manager = None
 
+    def set_signal_targeting(self, signal_targeting):
+        """Set the signal targeting instance for RSSI sample collection."""
+        self.signal_targeting = signal_targeting
+    
     def enable_verbose(self):
         """Enable verbose mode to show all packets, not just POS."""
         self._verbose = True

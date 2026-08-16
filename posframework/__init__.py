@@ -21,6 +21,18 @@ Additional Modules:
     Network Disruption: Deauth storms, jamming, rate limiting
     Post Attack: Post-attack analysis and next steps generation
 
+Advanced WiFi Attacks:
+    AP Clone: Auto-clone target AP SSID after deauth
+    KRACK: Key reinstallation attack (CVE-2017-13077/13078)
+    WiFi DoS: CTS flood, beacon exhaust, QoS null, fragmentation
+    Client Isolation: Subtle disassociation and handoff forcing
+
+Printer Exploitation:
+    Printer Recon: mDNS/SNMP/HTTP printer discovery
+    IPP Scanner: Port 631 fingerprinting and queue enumeration
+    Print Interceptor: ARP spoof print traffic interception
+    Printer Credential Harvester: SMB/SNMP/HTTP credential capture
+
 Package modules:
     config       - Constants, thresholds, channel lists, logging
     intel        - POS vendor/SSID intelligence matching
@@ -37,6 +49,14 @@ Package modules:
     cred_harvester - Credential harvesting
     network_disruption - Deauth/jamming attacks
     post_attack  - Post-attack analysis & next steps
+    ap_clone     - AP auto-clone after deauth
+    krack        - KRACK key reinstallation attack
+    dos_wifi     - WiFi denial of service (multiple modes)
+    client_isolation - Client disassociation/isolation
+    printer_recon - Network printer discovery
+    ipp_scanner  - IPP protocol scanner
+    print_interceptor - Print job interception
+    printer_creds - Printer credential harvesting
     monitor_mode - Windows monitor mode management
     monitor_windows - Windows monitor mode utility
     __main__     - CLI entry point
@@ -63,3 +83,11 @@ from .monitor_mode import (
     check_npcap_monitor_support, get_available_interfaces,
     get_interface_mac, MonitorModeError, MonitorManagerInterface
 )
+from .ap_clone import APCloneEngine
+from .krack import KRACKEngine
+from .dos_wifi import WiFiDoSEngine, DoSMode
+from .client_isolation import ClientIsolationEngine
+from .printer_recon import PrinterRecon
+from .ipp_scanner import IPPScanner
+from .print_interceptor import PrintJobInterceptor
+from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester

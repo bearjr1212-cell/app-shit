@@ -167,7 +167,8 @@ class MultiTerminalInterface:
         try:
             self.deauth = DeauthEngine(self.monitor_iface)
             clients = self.db.get_clients_for_bssid(target_bssid)
-            self.deauth.add_target(target_bssid, set(clients))
+            # get_clients_for_bssid returns [(mac, rssi), ...] tuples - extract MACs
+            self.deauth.add_target(target_bssid, set(mac for mac, rssi in clients))
             self.deauth.start()
             self._log("attack", f"Deauth active: {len(clients)} clients targeted")
         except Exception as e:

