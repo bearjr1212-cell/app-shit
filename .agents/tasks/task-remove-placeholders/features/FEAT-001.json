@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Replace all placeholder/stub implementations with real functional code across ssl_strip.py, mitm.py, network_disruption.py, cred_tester.py, and handshake.py",
+  "status": "in_progress",
+  "steps": [
+    "1. posframework/ssl_strip.py - Replace the placeholder HTTP server that returns static 'SSL Stripped' text with a real HTTP proxy that: (a) enables IP forwarding on Linux via /proc/sys/net/ipv4/ip_forward, (b) sets up iptables REDIRECT rules to route port 80 traffic through the proxy, (c) implements a real HTTP proxy using socket-level connections that forwards client requests to the real server, (d) strips HTTPS URLs from response bodies (https:// -> http://), (e) removes Strict-Transport-Security headers from responses, (f) downgrades secure cookies by removing 'Secure' flag, (g) rewrites Location headers from https to http, (h) logs all intercepted URLs and form POST data for credential harvesting, (i) implements proper ARP poisoning with target/gateway in the _ssl_stripper_loop method instead of just sniffing, (j) make the HSTSInjector.bypass_hsts actually implement NTP-based time manipulation and homograph domain techniques, (k) make SSLRedir.process_request integrate with real packet forwarding",
+    "2. posframework/mitm.py - Add real IP forwarding enablement and packet forwarding: (a) add _enable_ip_forwarding() method that writes '1' to /proc/sys/net/ipv4/ip_forward on Linux and uses registry/netsh on Windows, (b) add _disable_ip_forwarding() to restore original value on stop, (c) in start() call _enable_ip_forwarding(), (d) in stop() call _disable_ip_forwarding() and send ARP restore packets multiple times (3-5 times), (e) make HTTPInjector actually integrate _modify_response into the sniff loop by overriding _sniff_traffic to intercept and re-inject modified packets using NetfilterQueue or scapy's packet modification approach, (f) add proper content-length recalculation after injection",
+    "3. posframework/network_disruption.py - Replace stub methods: (a) NetworkDisruption._perform_additional_disruption should send disassociation frames (subtype 10) with varied reason codes AND authentication floods with random MACs, (b) AirjackingEngine.perform_arp_poison_wireless should implement real wireless ARP poisoning by crafting ARP reply packets (op=2) with spoofed source and sending them via the monitor interface using sendp with proper Dot11/LLC/SNAP/ARP layer stack for wireless ARP injection, (c) ChannelJammer should use subprocess 'iw dev <iface> set channel <ch>' instead of broken conf.iface.channel, (d) RateLimiter._get_random_mac should be inherited properly (currently calls self._get_random_mac but it's only defined in ChannelJammer - move to base class)",
+    "4. posframework/cred_tester.py - Replace placeholder test_http_portal and test_admin_panel methods: (a) test_http_portal should use socket-level HTTP to POST credentials to the portal URL, parse the response for success indicators (302 redirect, 'welcome', 'success', 'dashboard' in body), handle timeouts and connection errors, (b) test_admin_panel should try common admin panel URLs (/admin, /login, /management, /cgi-bin) on the target host with both HTTP Basic auth and form-based POST login, detect success by checking for 200 status without login form in response, try multiple common credential pairs, (c) both methods should store results in self._results with success/failure status",
+    "5. posframework/handshake.py - Add a HandshakeSniffer class that provides real-time capture and automatic reassembly: (a) HandshakeSniffer(interface, target_bssid=None, output_dir='handshakes') with start()/stop() lifecycle, (b) internal sniff thread with BPF filter for EAPOL frames, (c) automatic EAPOL message identification using the same key_info bit logic from krack.py, (d) automatic assembly tracking per (client_mac, bssid) pair, (e) automatic PCAP export when all 4 messages captured, (f) callback support for notifying when a complete handshake is captured, (g) proper cleanup and thread join on stop()"
+  ],
+  "acceptance_criteria": [
+    "python -c 'from posframework.ssl_strip import SSLStripper, HSTSInjector, SSLRedir' imports without error",
+    "python -c 'from posframework.mitm import MITMEngine, HTTPInjector' imports without error",
+    "python -c 'from posframework.network_disruption import NetworkDisruption, AirjackingEngine, ChannelJammer, RateLimiter, DeauthStorm' imports without error",
+    "python -c 'from posframework.cred_tester import CredentialTester' imports without error",
+    "python -c 'from posframework.handshake import HandshakeCapture, HandshakeSniffer, build_eapol_frame' imports without error",
+    "No placeholder comments like 'placeholder', 'TODO', 'stub' remain in any of the 5 modified files",
+    "No methods that just return False with a log message as their only implementation",
+    "No methods with just 'pass' as their body (except abstract methods or __init__ that legitimately does nothing)",
+    "All subprocess calls use real commands (iptables, iw, ip, wpa_supplicant, netsh)",
+    "SSLStripper has a real HTTP proxy that forwards requests to upstream servers",
+    "MITMEngine enables/disables IP forwarding on start/stop",
+    "AirjackingEngine.perform_arp_poison_wireless crafts and sends real ARP packets over wireless"
+  ],
+  "verification": [
+    "cd /projects/sandbox/app-shit && python -c 'import posframework; print(\"All modules imported OK\")'",
+    "cd /projects/sandbox/app-shit && python -c 'import ast, sys; [ast.parse(open(f\"posframework/{m}\").read()) for m in [\"ssl_strip.py\",\"mitm.py\",\"network_disruption.py\",\"cred_tester.py\",\"handshake.py\"]]; print(\"AST parse OK\")'",
+    "grep -rn 'pass$' posframework/network_disruption.py posframework/mitm.py posframework/ssl_strip.py posframework/cred_tester.py | grep -v '__init__\\|except\\|# ' should return no results for stub methods",
+    "grep -rn 'placeholder\\|TODO\\|stub' posframework/ssl_strip.py posframework/mitm.py posframework/network_disruption.py posframework/cred_tester.py posframework/handshake.py should return no results"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
