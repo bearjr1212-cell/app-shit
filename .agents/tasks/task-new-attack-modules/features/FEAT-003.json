@@ -2,7 +2,7 @@
   "id": "FEAT-003",
   "type": "feat",
   "description": "Integrate all new modules into orchestrator, __main__.py CLI, and __init__.py exports. Add CLI flags and wire up the attack pipeline.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "1. Update posframework/orchestrator.py - Import all new modules. Add constructor parameters: enable_ap_clone=False, enable_krack=False, enable_dos=False, dos_mode=None, enable_client_isolation=False, enable_printer_attacks=False. In start() after existing Phase 5c, add Phase 5d (Advanced WiFi attacks) and Phase 5e (Printer attacks). In stop(), add all new engines to the engines list. Wire up APCloneEngine to activate after deauth phase. Wire up KRACKEngine when handshake is captured. Wire up WiFiDoSEngine as alternative/supplement to deauth. Wire up ClientIsolationEngine alongside deauth. Wire up PrinterRecon, PrintJobInterceptor, PrinterCredentialHarvester in printer phase.",
     "2. Update posframework/__main__.py - Add CLI arguments to 'attack' and 'full' subparsers: --enable-ap-clone, --enable-krack, --enable-dos, --dos-mode (choices: cts_flood, beacon_exhaust, qos_null, fragment), --enable-client-isolation, --enable-printer-attacks. Pass these to AttackOrchestrator constructor.",
@@ -23,5 +23,5 @@
     "Run: grep -n 'APCloneEngine\\|KRACKEngine\\|WiFiDoSEngine\\|PrinterRecon' posframework/__init__.py"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All integration completed successfully. 4 files modified: orchestrator.py (imports + constructor params + Phase 5d/5e in start + KRACK trigger in background_recon + expanded stop() engine list), __main__.py (6 new CLI flags on attack and full subparsers, passed to orchestrator), __init__.py (8 new module imports + updated docstring), config.py (14 new constants for KRACK, DoS, and Printer sections). All 36 .py files pass AST validation."
 }

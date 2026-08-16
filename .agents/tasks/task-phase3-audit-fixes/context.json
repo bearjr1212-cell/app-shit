@@ -1,0 +1,28 @@
+{
+  "project_type": "Python WiFi reconnaissance and attack framework",
+  "language": "Python",
+  "build_system": "setup.py with no build step required",
+  "test_framework": "No test suite present - validation by syntax/import check",
+  "build_command": "python -c \"import posframework\"",
+  "test_command": "python -c \"import posframework; from posframework import recon, karma, beacons, deauth, mitm, dns_spoof, ssl_strip, orchestrator, rogueap\"",
+  "verification_instructions": "Run python syntax check on all modified files and import validation",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "cd /projects/sandbox/app-shit",
+  "environment_constraints": "INTEGRATIONS_ONLY network - no pip install, no Docker. Use pre-installed Python for AST/syntax validation only.",
+  "contribution_requirements": "Commit to existing branch fix/complete-audit-fixes and push. PR #1 is already open.",
+  "key_patterns": "Each module is a class with start()/stop() methods. Uses scapy for packet manipulation. Logging via config.log. Cross-platform support via IS_WINDOWS/IS_LINUX flags.",
+  "relevant_files": [
+    "posframework/recon.py",
+    "posframework/karma.py",
+    "posframework/beacons.py",
+    "posframework/mitm.py",
+    "posframework/dns_spoof.py",
+    "posframework/ssl_strip.py",
+    "posframework/deauth.py",
+    "posframework/orchestrator.py",
+    "posframework/__main__.py",
+    "posframework/rogueap.py",
+    "posframework/config.py"
+  ],
+  "directory_structure": "posframework/ contains all modules. Each module is a single .py file with one or more classes. config.py has shared constants/logging. __main__.py is the CLI entry point."
+}
