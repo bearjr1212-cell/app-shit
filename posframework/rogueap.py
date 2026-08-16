@@ -14,6 +14,7 @@ import subprocess
 import time
 import threading
 import http.server
+import re
 from urllib.parse import parse_qs
 
 from scapy.all import RandMAC
@@ -31,6 +32,15 @@ class RogueAPEngine:
 
     def __init__(self, interface, ssid, channel, db, mac_address=None,
                  use_wpa=False, wpa_passphrase=None):
+        # Input validation
+        if not ssid or len(ssid) > 32:
+            raise ValueError("SSID must be 1-32 characters")
+        if not re.match(r'^[a-zA-Z0-9\s\-_.]*$', ssid):
+            raise ValueError("SSID contains invalid characters")
+        if use_wpa and wpa_passphrase:
+            if len(wpa_passphrase) < 8 or len(wpa_passphrase) > 63:
+                raise ValueError("WPA passphrase must be 8-63 characters")
+        
         self.interface = interface
         self.ssid = ssid
         self.channel = str(channel)
@@ -229,35 +239,57 @@ class RogueAPEngine:
         log.info(f"Captive portal on {NETWORK_GW_IP}:{CAPTIVE_PORTAL_PORT}")
 
     def start(self):
-        self.running = True
-        self._configure_interface()
-
-        if IS_WINDOWS:
-            # Start Windows hosted network
-            result = subprocess.run(
-                ["netsh", "wlan", "start", "hostednetwork"],
-                capture_output=True, text=True, timeout=10)
-            if result.returncode != 0:
-                log.error(f"Hosted network failed: {result.stderr.strip()}")
-                log.info("Falling back to captive portal only mode")
+        """Start the rogue AP with proper error handling and rollback."""
+        try:
+            self.running = True
+            log.info(f"Configuring interface {self.interface}...")
+            self._configure_interface()
+            
+            if IS_WINDOWS:
+                # Start Windows hosted network
+                log.info("Starting Windows hosted network...")
+                result = subprocess.run(
+                    ["netsh", "wlan", "start", "hostednetwork"],
+                    capture_output=True, text=True, timeout=10)
+                if result.returncode != 0:
+                    log.error(f"Hosted network failed: {result.stderr.strip()}")
+                    log.info("Falling back to captive portal only mode")
+                    # Continue but skip hostapd-specific steps
+                else:
+                    log.info(f"Windows hosted network '{self.ssid}' started")
             else:
-                log.info(f"Windows hosted network '{self.ssid}' started")
-        else:
-            conf_path = self._write_hostapd_conf()
-            self._hostapd_proc = subprocess.Popen(
-                ["hostapd", conf_path],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2)
-            if self._hostapd_proc.poll() is not None:
-                log.error("hostapd failed to start")
-                self.running = False
-                return False
-            log.info(f"Rogue AP '{self.ssid}' active on {self.interface} ch {self.channel}")
+                conf_path = self._write_hostapd_conf()
+                log.info("Starting hostapd...")
+                self._hostapd_proc = subprocess.Popen(
+                    ["hostapd", conf_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE)
+                time.sleep(2)
+                if self._hostapd_proc.poll() is not None:
+                    log.error("hostapd failed to start")
+                    stderr_output = self._hostapd_proc.stderr.read().decode() if self._hostapd_proc.stderr else ""
+                    log.error(f"hostapd error: {stderr_output}")
+                    self.running = False
+                    self.stop()  # Rollback
+                    return False
+                log.info(f"Rogue AP '{self.ssid}' active on {self.interface} ch {self.channel}")
 
-        self._start_dnsmasq()
-        self._setup_iptables()
-        self._start_captive_portal()
-        return True
+            log.info("Starting dnsmasq...")
+            self._start_dnsmasq()
+            
+            log.info("Setting up iptables redirect...")
+            self._setup_iptables()
+            
+            log.info("Starting captive portal...")
+            self._start_captive_portal()
+            
+            log.info(f"Rogue AP started: {self.ssid} on ch{self.channel}")
+            return True
+        except Exception as e:
+            log.error(f"Rogue AP startup failed: {e}")
+            self.running = False
+            self.stop()  # Rollback
+            return False
 
     def stop(self):
         self.running = False

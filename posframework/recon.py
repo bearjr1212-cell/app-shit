@@ -99,7 +99,8 @@ class ReconEngine:
         self._verbose = False
         # Packet type counters for summary stats
         self._pkt_stats = defaultdict(int)
-        
+        # Signal targeting integration
+        self.signal_targeting = None
         # Monitor mode manager
         self._monitor_manager = None
 
@@ -124,7 +125,10 @@ class ReconEngine:
     def _hop_channels(self):
         idx = 0
         while self.running:
-            self._set_channel(self.channels[idx])
+            try:
+                self._set_channel(self.channels[idx])
+            except Exception as e:
+                log.error(f"Channel hop failed: {e}")
             idx = (idx + 1) % len(self.channels)
             time.sleep(CHANNEL_HOP_INTERVAL)
 
@@ -311,6 +315,9 @@ class ReconEngine:
         vendor = self._get_vendor(client_mac)
         pos_flag = is_pos_vendor(vendor)
         self.db.update_client(client_mac, vendor, rssi, pos_flag, probed_ssid=probed_ssid or None)
+        # Pass RSSI to signal targeting
+        if self.signal_targeting:
+            self.signal_targeting.add_sample(client_mac, None, rssi)
         if pos_flag:
             log.info(f"POS Probe: {vendor} | {client_mac} | '{probed_ssid}'")
         elif self._verbose:
@@ -379,6 +386,9 @@ class ReconEngine:
         vendor = self._get_vendor(client_mac)
         pos_flag = is_pos_vendor(vendor)
         self.db.update_client(client_mac, vendor, rssi, pos_flag, associated_bssid=bssid)
+        # Pass RSSI to signal targeting
+        if self.signal_targeting:
+            self.signal_targeting.add_sample(client_mac, bssid, rssi)
         if pos_flag:
             log.info(f"POS Association: {vendor} | {client_mac} -> {bssid}")
 
@@ -390,6 +400,9 @@ class ReconEngine:
         vendor = self._get_vendor(client_mac)
         pos_flag = is_pos_vendor(vendor)
         self.db.update_client(client_mac, vendor, rssi, pos_flag, associated_bssid=bssid)
+        # Pass RSSI to signal targeting
+        if self.signal_targeting:
+            self.signal_targeting.add_sample(client_mac, bssid, rssi)
         
         # Extract SSID from data frame for verbose output
         if self._verbose:
@@ -493,6 +506,10 @@ class ReconEngine:
             teardown_monitor_mode(self._monitor_manager)
             self._monitor_manager = None
 
+    def set_signal_targeting(self, signal_targeting):
+        """Set the signal targeting instance for RSSI sample collection."""
+        self.signal_targeting = signal_targeting
+    
     def enable_verbose(self):
         """Enable verbose mode to show all packets, not just POS."""
         self._verbose = True

@@ -16,7 +16,7 @@ import threading
 import subprocess
 from collections import defaultdict
 
-from scapy.all import ARP, IP, TCP, UDP, sniff, sendp, get_if_hwaddr, conf
+from scapy.all import ARP, IP, TCP, UDP, sniff, sendp, get_if_hwaddr, conf, srp
 from scapy.layers.inet import Ether
 from scapy.layers.dns import DNS, DNSQR, DNSRR
 

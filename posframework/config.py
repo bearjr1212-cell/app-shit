@@ -34,10 +34,10 @@ KNOWN_BEACON_ROTATE = 20
 # ─── Rogue AP / Captive Portal ───────────────────────────────────────────────
 CAPTIVE_PORTAL_PORT = 80
 CAPTIVE_PORTAL_SSL_PORT = 443
-NETWORK_GW_IP = "10.0.0.1"
-NETWORK_MASK = "255.255.255.0"
-NETWORK_IP = "10.0.0.0"
-DHCP_LEASE = "10.0.0.2,10.0.0.100,12h"
+NETWORK_GW_IP = os.environ.get("POSFW_NETWORK_GW", "10.0.0.1")
+NETWORK_MASK = os.environ.get("POSFW_NETWORK_MASK", "255.255.255.0")
+NETWORK_IP = os.environ.get("POSFW_NETWORK_IP", "10.0.0.0")
+DHCP_LEASE = os.environ.get("POSFW_DHCP_LEASE", "10.0.0.2,10.0.0.100,12h")
 DNS_CONF_PATH = os.path.join(tempfile.gettempdir(), "dnsmasq.conf")
 
 # ─── Channels ────────────────────────────────────────────────────────────────

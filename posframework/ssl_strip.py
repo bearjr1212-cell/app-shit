@@ -102,7 +102,7 @@ class SSLStripper:
             def do_POST(self):
                 length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(length).decode(errors='ignore')
-                log.info(f"POST data: {body}")
+                log.info(f"POST data captured from {self.client_address[0]}")
 
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")

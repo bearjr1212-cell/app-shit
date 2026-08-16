@@ -58,20 +58,33 @@ class SignalTargeting:
         # Target clients within ~20 meters (RSSI > -80 dBm)
         return avg > -80
 
+    def should_deauth_with_rssi(self, client_mac, rssi):
+        """Return True if client should be targeted using provided RSSI value."""
+        return rssi > -80
+
     def get_closest_clients(self, bssid, db, limit=10):
         """
         Get the N closest clients for a given AP from the database.
         Returns list of (client_mac, avg_rssi) tuples.
         """
-        # Get clients from DB for this BSSID
+        # Get clients from DB for this BSSID (now returns list of (mac, rssi) tuples)
         clients = db.get_clients_for_bssid(bssid)
         if not clients:
             return []
 
         # Calculate average RSSI for each
         client_rssis = []
-        for mac in clients:
+        for item in clients:
+            # Handle both tuple (mac, rssi) and plain mac formats
+            if isinstance(item, tuple):
+                mac, db_rssi = item
+            else:
+                mac = item
+                db_rssi = -100
             avg = self.get_avg_rssi(mac)
+            # Use the better of stored avg or DB value
+            if avg == -100 and db_rssi is not None:
+                avg = db_rssi
             client_rssis.append((mac, avg))
 
         # Sort by RSSI (strongest first) and limit
