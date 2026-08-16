@@ -60,18 +60,27 @@ class KARMAEngine:
     def _beacon_loop(self):
         """Broadcast beacons for all probed SSIDs."""
         while self.running:
-            now = time.time()
-            if now - self._start_time > 60:  # Rotate every 60s
-                self._start_time = now
-                self._beacon_count += 1
+            try:
+                now = time.time()
+                if now - self._start_time > 60:  # Rotate every 60s
+                    self._start_time = now
+                    self._beacon_count += 1
 
-            for ssid_set in self._probed_ssids.values():
-                for ssid in ssid_set:
-                    if not self.running:
-                        break
-                    frame = self._build_beacon(ssid)
-                    sendp(frame, iface=self.interface, verbose=False)
-                    time.sleep(BEACON_INTERVAL)
+                for ssid_set in self._probed_ssids.values():
+                    for ssid in ssid_set:
+                        if not self.running:
+                            break
+                        frame = self._build_beacon(ssid)
+                        try:
+                            sendp(frame, iface=self.interface, verbose=False)
+                        except Exception as e:
+                            log.error(f"KARMA beacon send failed: {e}")
+                        time.sleep(BEACON_INTERVAL)
+            except Exception as e:
+                log.error(f"KARMA beacon loop error: {e}")
+                if not self.running:
+                    break
+                time.sleep(1)  # Prevent tight error loop
 
     def start(self):
         if self.running:

@@ -68,9 +68,19 @@ def verify_interface(iface):
             log.error("Npcap not found. Install from https://npcap.com/")
             sys.exit(1)
         log.info(f"Interface: {iface} (Npcap detected)")
-        
-        # Check for monitor mode support
-        if not check_npcap_monitor_support():
+
+        # Check for monitor mode support and enable if available
+        if check_npcap_monitor_support():
+            try:
+                manager = WindowsMonitorManager(iface)
+                if manager.enable_monitor_mode():
+                    log.info(f"Monitor mode enabled on {iface}")
+                else:
+                    log.warning("Monitor mode could not be enabled, using native capture mode")
+            except Exception as e:
+                log.warning(f"Monitor mode setup failed: {e}")
+                log.warning("Continuing with native capture mode")
+        else:
             log.warning("Monitor mode may be limited on this interface")
     else:
         try:

@@ -1,0 +1,50 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Fix remaining Phase 3 audit issues across all modules: EAPOL identification enhancement, error handling, platform checks, import fixes, attack timing, and thread consistency",
+  "status": "in_progress",
+  "steps": [
+    "1. posframework/recon.py - Enhance _identify_eapol_message() to handle FT reassociation (key_info bit 12 = FT flag) and group key handshakes (2-way: key_ack with secure bit set but no install). Add key_data_length check for better disambiguation. This fixes Issues #7 and #22.",
+    "2. posframework/beacons.py - Wrap add_probed_ssids_from_db() in try/except to handle: missing probed_ssids column, None values in row[0], empty database. Log warning on failure but do not crash. This fixes Issue #9.",
+    "3. posframework/karma.py - Add try/except around the sendp() call in _beacon_loop(). Log errors but continue the loop. Also add an outer try/except for the entire loop body to prevent thread death. This fixes Issue #10.",
+    "4. posframework/mitm.py - Add a platform check at the top of start() method. If IS_WINDOWS, log a warning that MITM via ARP poisoning has limited support on Windows with Npcap. Allow the attack to proceed but warn the user. Import IS_WINDOWS from config. This partially fixes Issue #15.",
+    "5. posframework/dns_spoof.py - Add a platform check in start(). If IS_WINDOWS, log warning about limited raw socket DNS spoofing on Windows. Import IS_WINDOWS from config. This partially fixes Issue #15.",
+    "6. posframework/ssl_strip.py - Add a platform check in start(). If IS_WINDOWS, log warning about limited SSL stripping on Windows. Import IS_WINDOWS from config. This partially fixes Issue #15.",
+    "7. posframework/__main__.py - In verify_interface(), when IS_WINDOWS and check_npcap_monitor_support() returns True, actually instantiate WindowsMonitorManager and call enable_monitor_mode(). Store the manager reference for later teardown. This fixes Issue #19.",
+    "8. posframework/orchestrator.py - Fix imports: (a) Remove unused 'wrpcap' from scapy.all import. (b) Add 'Dot11ProbeReq, Dot11Elt' to the scapy.layers.dot11 import (they are used in _background_recon but not imported). This fixes Issue #25 and a hidden bug.",
+    "9. posframework/orchestrator.py - Add attack start/end time logging. In start(), record self._start_time = time.time() and log it. In stop(), compute duration and log 'Attack duration: X.X seconds'. This fixes Issue #26.",
+    "10. posframework/deauth.py - Add an optional verification callback. Add a 'verify_callback' parameter to __init__. If set, after each deauth burst, call verify_callback(bssid, client_mac) to check if client disconnected. This fixes Issue #23.",
+    "11. posframework/deauth.py - The join(timeout=5) is already in place. Confirm thread daemon flag consistency - the thread is already daemon=True. No change needed for Issue #24 here.",
+    "12. posframework/karma.py - Ensure _thread.join(timeout=5) is already present (it is). No change needed for Issue #24.",
+    "13. posframework/beacons.py - Ensure _thread.join(timeout=5) is already present (it is). No change needed for Issue #24."
+  ],
+  "acceptance_criteria": [
+    "python -c 'import ast; ast.parse(open(\"posframework/recon.py\").read())' succeeds",
+    "python -c 'import ast; ast.parse(open(\"posframework/karma.py\").read())' succeeds",
+    "python -c 'import ast; ast.parse(open(\"posframework/beacons.py\").read())' succeeds",
+    "python -c 'import ast; ast.parse(open(\"posframework/mitm.py\").read())' succeeds",
+    "python -c 'import ast; ast.parse(open(\"posframework/dns_spoof.py\").read())' succeeds",
+    "python -c 'import ast; ast.parse(open(\"posframework/ssl_strip.py\").read())' succeeds",
+    "python -c 'import ast; ast.parse(open(\"posframework/orchestrator.py\").read())' succeeds",
+    "python -c 'import ast; ast.parse(open(\"posframework/__main__.py\").read())' succeeds",
+    "python -c 'import ast; ast.parse(open(\"posframework/deauth.py\").read())' succeeds",
+    "recon.py _identify_eapol_message() handles group key handshake (returns 5 or similar indicator)",
+    "orchestrator.py no longer imports wrpcap, and does import Dot11ProbeReq and Dot11Elt",
+    "karma.py _beacon_loop() has try/except around sendp()",
+    "beacons.py add_probed_ssids_from_db() has try/except",
+    "mitm.py start() has IS_WINDOWS platform check with warning",
+    "dns_spoof.py start() has IS_WINDOWS platform check with warning",
+    "ssl_strip.py start() has IS_WINDOWS platform check with warning",
+    "orchestrator.py start() logs attack start time and stop() logs duration"
+  ],
+  "verification": [
+    "Run: cd /projects/sandbox/app-shit && python -c \"import ast; [ast.parse(open(f'posframework/{m}.py').read()) for m in ['recon','karma','beacons','mitm','dns_spoof','ssl_strip','orchestrator','__main__','deauth']]\"",
+    "Run: cd /projects/sandbox/app-shit && grep -n 'group.key\\|FT.*reassoc\\|key_data_len' posframework/recon.py to confirm EAPOL enhancement",
+    "Run: cd /projects/sandbox/app-shit && grep -n 'IS_WINDOWS' posframework/mitm.py posframework/dns_spoof.py posframework/ssl_strip.py to confirm platform checks",
+    "Run: cd /projects/sandbox/app-shit && grep -n 'wrpcap' posframework/orchestrator.py should return nothing (removed)",
+    "Run: cd /projects/sandbox/app-shit && grep -n 'Dot11ProbeReq' posframework/orchestrator.py should show import line",
+    "Run: cd /projects/sandbox/app-shit && grep -n '_start_time\\|duration' posframework/orchestrator.py to confirm timing"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

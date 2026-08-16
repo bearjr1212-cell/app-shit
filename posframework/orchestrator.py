@@ -18,8 +18,8 @@ import time
 import threading
 import os
 
-from scapy.all import sniff, raw, RandMAC, wrpcap
-from scapy.layers.dot11 import Dot11
+from scapy.all import sniff, raw, RandMAC
+from scapy.layers.dot11 import Dot11, Dot11ProbeReq, Dot11Elt
 from scapy.layers.eap import EAPOL
 
 from .config import CHANNELS_24GHZ, WIFI_BROADCAST, log
@@ -119,6 +119,8 @@ class AttackOrchestrator:
     def start(self):
         """Execute the full automated attack chain."""
         self.running = True
+        self._attack_start_time = time.time()
+        log.info(f"Attack chain initiated at {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
         # ── Phase 1: Passive Recon ────────────────────────────────────────────
         log.info(f"Phase 1: Passive recon ({self.recon_duration}s)...")
@@ -284,6 +286,10 @@ class AttackOrchestrator:
     def stop(self):
         """Shut down all attack components gracefully."""
         self.running = False
+
+        if hasattr(self, '_attack_start_time'):
+            duration = time.time() - self._attack_start_time
+            log.info(f"Attack duration: {duration:.1f} seconds")
         
         # Stop all engines
         engines = [

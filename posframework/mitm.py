@@ -82,6 +82,10 @@ class MITMEngine:
 
     def start(self, target_ip=None, gateway_ip=None):
         """Start MITM attack."""
+        if IS_WINDOWS:
+            log.warning("MITM via ARP poisoning has limited support on Windows.")
+            log.warning("Raw socket operations may require Npcap with WinPcap compatibility mode.")
+
         self.running = True
         self.target_ip = target_ip or self.target_ip
         self.gateway_ip = gateway_ip or self.gateway_ip

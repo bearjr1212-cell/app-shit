@@ -166,6 +166,22 @@ class ReconEngine:
         return False
 
     def _identify_eapol_message(self, eapol_raw: bytes) -> int:
+        """
+        Identify EAPOL-Key message number from raw EAPOL frame.
+
+        Handles:
+          - Standard 4-way handshake (messages 1-4)
+          - Group Key handshake (messages 5-6 for GK M1/M2)
+          - FT reassociation handshakes (same bit patterns as standard)
+
+        Key Info field bits (IEEE 802.11-2020 Section 12.7.2):
+          Bit 3: Pairwise (1=pairwise, 0=group)
+          Bit 6: Install
+          Bit 7: Key Ack
+          Bit 8: Key MIC
+          Bit 9: Secure
+          Bit 12: Encrypted Key Data
+        """
         if len(eapol_raw) < 10:
             return 0
         key_info = struct.unpack(">H", eapol_raw[5:7])[0]
@@ -173,12 +189,33 @@ class ReconEngine:
         key_mic = (key_info >> 8) & 1
         secure = (key_info >> 9) & 1
         install = (key_info >> 6) & 1
+        pairwise = (key_info >> 3) & 1
+        encrypted = (key_info >> 12) & 1
+
+        # Extract key data length for additional validation
+        key_data_length = 0
+        if len(eapol_raw) >= 99:
+            key_data_length = struct.unpack(">H", eapol_raw[97:99])[0]
+
+        # Group Key Handshake (2-way, pairwise bit = 0)
+        if not pairwise:
+            if key_ack and key_mic and secure:
+                return 5  # Group Key Message 1 (AP -> Client)
+            if not key_ack and key_mic and secure:
+                return 6  # Group Key Message 2 (Client -> AP)
+            return 0
+
+        # Standard 4-way handshake (also covers FT reassociation)
+        # Message 1: AP sends ANonce (Ack set, no MIC, no Install)
         if key_ack and not key_mic:
             return 1
+        # Message 2: Client sends SNonce (MIC set, no Ack, not Secure)
         if not key_ack and key_mic and not secure:
             return 2
+        # Message 3: AP sends GTK (Ack + MIC + Install + Secure + Encrypted)
         if key_ack and key_mic and install:
             return 3
+        # Message 4: Client confirms (MIC + Secure, no Ack, no Install)
         if not key_ack and key_mic and secure:
             return 4
         return 0

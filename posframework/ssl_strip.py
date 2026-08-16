@@ -16,7 +16,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from scapy.all import IP, TCP, Raw, sniff, send, ARP, get_if_hwaddr
 from scapy.layers.inet import Ether
 
-from .config import NETWORK_GW_IP, CAPTIVE_PORTAL_PORT, log
+from .config import NETWORK_GW_IP, CAPTIVE_PORTAL_PORT, IS_WINDOWS, log
 
 
 class SSLStripper:
@@ -50,6 +50,10 @@ class SSLStripper:
 
     def start(self, target_ip=None, gateway_ip=None):
         """Start SSL stripping attack."""
+        if IS_WINDOWS:
+            log.warning("SSL stripping has limited support on Windows.")
+            log.warning("Packet interception requires Npcap with admin privileges.")
+
         self.target_ip = target_ip or self.target_ip
         self.gateway_ip = gateway_ip or self.gateway_ip
 

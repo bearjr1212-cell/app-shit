@@ -27,11 +27,12 @@ class DeauthEngine:
     using data from the recon scanner's database.
     """
 
-    def __init__(self, interface):
+    def __init__(self, interface, verify_callback=None):
         self.interface = interface
         self.running = False
         self._targets = defaultdict(set)  # bssid -> {client_mac, ...}
         self._thread = None
+        self.verify_callback = verify_callback
 
     def add_target(self, bssid, clients=None):
         """Add a BSSID and its known clients as deauth targets."""
@@ -103,6 +104,12 @@ class DeauthEngine:
                                       inter=0.02, verbose=False)
                             except Exception as e:
                                 log.error(f"Deauth send failed for {client_mac} -> AP: {e}")
+                        # Optionally verify deauth effectiveness
+                        if self.verify_callback:
+                            try:
+                                self.verify_callback(bssid, client_mac)
+                            except Exception as e:
+                                log.debug(f"Deauth verify callback error: {e}")
                 time.sleep(DEAUTH_BURST_INTERVAL)
             except Exception as e:
                 log.error(f"Deauth loop error: {e}")
