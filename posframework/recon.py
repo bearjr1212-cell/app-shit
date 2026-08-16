@@ -403,7 +403,10 @@ class ReconEngine:
         if msg_num == 0:
             return
         key = (client_mac, bssid)
-        self._eapol_tracker[key].add(msg_num)
+        # Only track pairwise handshake messages (1-4) in the 4-way tracker
+        # Group key messages (5, 6) are logged but not added to the tracker
+        if msg_num <= 4:
+            self._eapol_tracker[key].add(msg_num)
         self.db.log_eapol(client_mac, bssid, msg_num)
         vendor = self._get_vendor(client_mac)
         captured = sorted(self._eapol_tracker[key])

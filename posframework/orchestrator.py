@@ -305,12 +305,6 @@ class AttackOrchestrator:
                 except Exception as e:
                     log.error(f"Error stopping {engine.__class__.__name__}: {e}")
         
-        # Wait for background threads (timeout after 10s)
-        import threading
-        for thread in threading.enumerate():
-            if thread != threading.current_thread():
-                thread.join(timeout=1)
-        
         # Now safe to close database
         if self.db:
             self.db.close()

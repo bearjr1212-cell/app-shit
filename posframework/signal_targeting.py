@@ -60,7 +60,7 @@ class SignalTargeting:
 
     def should_deauth_with_rssi(self, client_mac, rssi):
         """Return True if client should be targeted using provided RSSI value."""
-        return rssi > -80
+        return rssi > self.rssi_threshold
 
     def get_closest_clients(self, bssid, db, limit=10):
         """

@@ -60,7 +60,8 @@ class DeauthEngine:
         for row in pos_aps:
             bssid = row[0]
             clients = db.get_clients_for_bssid(bssid)
-            self._targets[bssid].update(clients)
+            # get_clients_for_bssid returns [(mac, rssi), ...] tuples
+            self._targets[bssid].update(mac for mac, rssi in clients)
         log.info(f"Deauth POS-target: {len(self._targets)} POS APs")
 
     def remove_target(self, bssid):
@@ -113,8 +114,9 @@ class DeauthEngine:
                 time.sleep(DEAUTH_BURST_INTERVAL)
             except Exception as e:
                 log.error(f"Deauth loop error: {e}")
-                self.running = False
-                break
+                if not self.running:
+                    break
+                time.sleep(1)  # Prevent tight error loop
 
     def start(self):
         if self.running:
