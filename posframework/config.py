@@ -58,6 +58,25 @@ DEFAULT_AP_IFACE = "WiFi 2" if IS_WINDOWS else "wlan1"
 MONITOR_MODE_RETRY_COUNT = 3
 MONITOR_MODE_RETRY_DELAY = 2
 
+# ─── KRACK Attack ─────────────────────────────────────────────────────────────
+KRACK_REPLAY_COUNT = 3
+KRACK_MAX_MSG3_REPLAYS = 10
+
+# ─── WiFi DoS ────────────────────────────────────────────────────────────────
+DOS_CTS_INTERVAL = 0.01
+DOS_BEACON_INTERVAL = 0.005
+DOS_QOS_INTERVAL = 0.02
+DOS_FRAGMENT_INTERVAL = 0.01
+
+# ─── Printer Exploitation ────────────────────────────────────────────────────
+PRINTER_SCAN_TIMEOUT = 30
+IPP_DEFAULT_PORT = 631
+PRINTER_RAW_PORT = 9100
+LPD_PORT = 515
+SNMP_DEFAULT_PORT = 161
+PRINTER_SNMP_COMMUNITY = "public"
+PRINTER_HTTP_TIMEOUT = 5
+
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
