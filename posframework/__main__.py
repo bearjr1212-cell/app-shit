@@ -335,6 +335,11 @@ def main():
 
     elif args.mode == "gui":
         # Tkinter graphical interface
+        # Run pre-flight checks to prevent segfaults on headless systems
+        # or when Tcl/Tk conflicts with scapy's libcrypto
+        from .tk_preflight import preflight_check
+        if not preflight_check(verbose=True):
+            sys.exit(1)
         from .gui import main as gui_main
         gui_main()
 

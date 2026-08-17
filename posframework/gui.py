@@ -1876,6 +1876,12 @@ def main():
             print("  Install tkinter for your platform")
         sys.exit(1)
 
+    # Pre-flight safety check: detect headless environments and potential
+    # segfaults BEFORE calling tk.Tk() which can crash at the C level.
+    from .tk_preflight import preflight_check
+    if not preflight_check(verbose=True):
+        sys.exit(1)
+
     root = tk.Tk()
 
     # Set window icon (if available)
