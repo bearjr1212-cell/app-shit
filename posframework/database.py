@@ -54,6 +54,7 @@ class POSDatabase:
         self.conn.commit()
         self._setup_printer_tables()
         self._setup_enrichment_tables()
+        self._setup_vlan_tables()
 
     def _setup_printer_tables(self):
         """Create printer-related tables."""
@@ -137,6 +138,51 @@ class POSDatabase:
             'CREATE INDEX IF NOT EXISTS idx_enriched_mac ON enriched_credentials(client_mac)')
         self.cursor.execute(
             'CREATE INDEX IF NOT EXISTS idx_correlations_identity ON credential_correlations(identity_id)')
+        self.conn.commit()
+
+    def _setup_vlan_tables(self):
+        """Create VLAN, network segment, and topology tables."""
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS vlans (
+                vlan_id INTEGER PRIMARY KEY,
+                name TEXT,
+                ip_range TEXT,
+                gateway TEXT,
+                native INTEGER DEFAULT 0,
+                discovery_method TEXT,
+                switch_name TEXT,
+                switch_port TEXT,
+                first_seen TEXT,
+                last_seen TEXT
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS network_segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vlan_id INTEGER,
+                ip_range TEXT,
+                hosts_discovered INTEGER,
+                services TEXT,
+                acl_gaps TEXT,
+                segment_type TEXT,
+                first_seen TEXT
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS vlan_topology (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                src_vlan INTEGER,
+                dst_vlan INTEGER,
+                route_type TEXT,
+                gateway_ip TEXT,
+                bidirectional INTEGER DEFAULT 0,
+                discovered_at TEXT
+            )
+        ''')
+        self.cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_segments_vlan ON network_segments(vlan_id)')
+        self.cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_topology_src ON vlan_topology(src_vlan)')
         self.conn.commit()
 
     def _maybe_commit(self):
@@ -341,6 +387,67 @@ class POSDatabase:
                 (identity_id,))
         else:
             self.cursor.execute('SELECT * FROM credential_correlations')
+        columns = [desc[0] for desc in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+
+    # ─── VLAN and network segmentation helper methods ─────────────────────────
+
+    def log_vlan(self, vlan_id, name, ip_range, gateway, native=0,
+                 discovery_method=None, switch_name=None, switch_port=None):
+        """Insert or update a discovered VLAN."""
+        now = datetime.now().isoformat(timespec='seconds')
+        self.cursor.execute('''
+            INSERT INTO vlans
+                (vlan_id, name, ip_range, gateway, native, discovery_method,
+                 switch_name, switch_port, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(vlan_id) DO UPDATE SET
+                name = COALESCE(excluded.name, vlans.name),
+                ip_range = COALESCE(excluded.ip_range, vlans.ip_range),
+                gateway = COALESCE(excluded.gateway, vlans.gateway),
+                native = excluded.native,
+                discovery_method = COALESCE(excluded.discovery_method, vlans.discovery_method),
+                switch_name = COALESCE(excluded.switch_name, vlans.switch_name),
+                switch_port = COALESCE(excluded.switch_port, vlans.switch_port),
+                last_seen = excluded.last_seen
+        ''', (vlan_id, name, ip_range, gateway, native, discovery_method,
+              switch_name, switch_port, now, now))
+        self._maybe_commit()
+
+    def log_segment(self, vlan_id, ip_range, hosts_discovered, services,
+                    acl_gaps, segment_type):
+        """Insert a network segment record."""
+        now = datetime.now().isoformat(timespec='seconds')
+        self.cursor.execute('''
+            INSERT INTO network_segments
+                (vlan_id, ip_range, hosts_discovered, services, acl_gaps,
+                 segment_type, first_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (vlan_id, ip_range, hosts_discovered, services, acl_gaps,
+              segment_type, now))
+        self._maybe_commit()
+
+    def log_vlan_route(self, src_vlan, dst_vlan, route_type, gateway_ip,
+                       bidirectional=0):
+        """Insert a VLAN topology route record."""
+        now = datetime.now().isoformat(timespec='seconds')
+        self.cursor.execute('''
+            INSERT INTO vlan_topology
+                (src_vlan, dst_vlan, route_type, gateway_ip, bidirectional,
+                 discovered_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (src_vlan, dst_vlan, route_type, gateway_ip, bidirectional, now))
+        self._maybe_commit()
+
+    def get_vlans(self):
+        """Return all discovered VLANs."""
+        self.cursor.execute('SELECT * FROM vlans ORDER BY vlan_id')
+        columns = [desc[0] for desc in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+
+    def get_segments(self):
+        """Return all network segments."""
+        self.cursor.execute('SELECT * FROM network_segments ORDER BY vlan_id')
         columns = [desc[0] for desc in self.cursor.description]
         return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
 

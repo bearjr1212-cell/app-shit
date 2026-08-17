@@ -80,6 +80,8 @@ Package modules:
     hashcat_integration - Hashcat WPA cracking integration
     cred_correlation - Cross-protocol credential correlation engine
     client_profiler  - Per-client device profiling
+    vlan_scanner     - VLAN discovery via 802.1Q/CDP/LLDP/DTP
+    network_mapper   - Network segmentation mapping
     __main__     - CLI entry point
 """
 
@@ -134,3 +136,5 @@ from .browser_cred_extract import BrowserCredentialExtractor
 from .hashcat_integration import HashcatIntegration
 from .cred_correlation import CredentialCorrelationEngine
 from .client_profiler import ClientProfiler
+from .vlan_scanner import VLANScanner
+from .network_mapper import NetworkSegmentationMapper

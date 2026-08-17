@@ -50,6 +50,8 @@ from .auto_pivot import AutoPivot
 from .client_profiler import ClientProfiler
 from .cred_enrichment import CredentialEnrichment
 from .hashcat_integration import HashcatIntegration
+from .vlan_scanner import VLANScanner
+from .network_mapper import NetworkSegmentationMapper
 
 
 class AttackOrchestrator:
@@ -84,6 +86,7 @@ class AttackOrchestrator:
                  enable_client_profiling=False,
                  enable_cred_enrichment=False,
                  enable_hashcat=False, hashcat_wordlist=None,
+                 enable_vlan_scan=False,
                  plugins=None, plugins_dir=None):
         self.monitor_iface = monitor_iface
         self.ap_iface = ap_iface
@@ -112,6 +115,9 @@ class AttackOrchestrator:
         self.enable_cred_enrichment = enable_cred_enrichment
         self.enable_hashcat = enable_hashcat
         self.hashcat_wordlist = hashcat_wordlist
+
+        # VLAN scanning flag
+        self.enable_vlan_scan = enable_vlan_scan
 
         self.db = db or POSDatabase()
         self.recon = ReconEngine(monitor_iface, self.db, channels=self.channels)
@@ -147,6 +153,10 @@ class AttackOrchestrator:
         self.client_profiler = None
         self.cred_enrichment = None
         self.hashcat = None
+
+        # VLAN scanning modules
+        self.vlan_scanner = None
+        self.network_mapper = None
 
         # Plugin system
         self._plugin_loader = None
@@ -364,6 +374,17 @@ class AttackOrchestrator:
             self.hashcat = HashcatIntegration()
             log.info("Hashcat integration enabled")
 
+        # ── Phase 5g: VLAN Scanning (post-pivot reconnaissance) ──────────────
+        if self.enable_vlan_scan:
+            self.vlan_scanner = VLANScanner(
+                self.monitor_iface, db=self.db, sniff_timeout=30)
+            self.network_mapper = NetworkSegmentationMapper(
+                self.monitor_iface, db=self.db,
+                vlan_scanner=self.vlan_scanner)
+            threading.Thread(
+                target=self._run_vlan_scan, daemon=True).start()
+            log.info("VLAN scanning and network mapping enabled")
+
         # ── Phase 6: Background Recon (feeds new clients into deauth) ────────
         self.recon.running = True
         threading.Thread(target=self._background_recon, daemon=True).start()
@@ -448,6 +469,34 @@ class AttackOrchestrator:
         except Exception:
             pass
 
+    def _run_vlan_scan(self):
+        """Run VLAN scanning and network mapping in background."""
+        try:
+            log.info("VLAN scan phase: discovering VLANs...")
+            self.vlan_scanner.start()
+
+            # Wait for sniff to complete
+            if self.vlan_scanner._sniff_thread:
+                self.vlan_scanner._sniff_thread.join(timeout=35)
+
+            self.vlan_scanner.stop()
+
+            vlans = self.vlan_scanner.get_vlans()
+            log.info(f"VLAN scan found {len(vlans)} VLANs, "
+                     f"starting network mapping...")
+
+            if vlans:
+                self.network_mapper.start()
+                self.network_mapper.map_all()
+                self.network_mapper.stop()
+
+                seg_map = self.network_mapper.get_map()
+                log.info(f"Network mapping complete: "
+                         f"{len(seg_map.get('segments', []))} segments, "
+                         f"{len(seg_map.get('acl_gaps', []))} ACL gaps")
+        except Exception as e:
+            log.error(f"VLAN scan phase error: {e}")
+
     def stop(self):
         """Shut down all attack components gracefully."""
         self.running = False
@@ -464,7 +513,8 @@ class AttackOrchestrator:
             self.ap_clone, self.krack_engine, self.dos_engine,
             self.client_isolation, self.printer_recon,
             self.print_interceptor, self.printer_cred_harvester,
-            self.auto_pivot, self.hashcat
+            self.auto_pivot, self.hashcat,
+            self.vlan_scanner, self.network_mapper
         ]
         
         for engine in engines:
