@@ -111,6 +111,7 @@ from .monitor_mode import (
 from .chip_detector import ChipDetector, ChipInfo, MonitorMethodSelector
 from .monitor_manager import EnhancedMonitorManager
 from .tshark_decrypt import TsharkDecryptionEngine, LiveDecryptionSession
+from .pywhat_analyzer import PyWhatAnalyzer, PyWhatCallback
 from .ap_clone import APCloneEngine
 from .krack import KRACKEngine
 from .dos_wifi import WiFiDoSEngine, DoSMode

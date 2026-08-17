@@ -1,3 +1,6 @@
 scapy
 manuf
 pyyaml
+# Optional: pyWhat for automated attack surface identification
+# Install with: pip install pywhat
+# pywhat

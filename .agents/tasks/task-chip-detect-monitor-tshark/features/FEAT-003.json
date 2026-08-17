@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Integrate pyWhat (https://github.com/bee-san/pyWhat) for automated attack surface identification. Route decrypted traffic from LiveDecryptionSession through pyWhat to identify credentials, API keys, hashes, URLs, IPs, crypto wallets, and other interesting patterns in captured data.",
+  "status": "in_progress",
+  "steps": [
+    "Create posframework/pywhat_analyzer.py with a PyWhatAnalyzer class that: (1) Tries to import pywhat at runtime (optional dependency), (2) Provides a fallback regex-based analyzer for common patterns (API keys, passwords, hashes, IPs, URLs, email addresses, credit cards, crypto wallets, JWT tokens) when pywhat is not installed, (3) Has analyze(text) method returning a list of identified items with type, value, and confidence, (4) Has analyze_traffic(decrypted_summary) method that processes DNS queries, HTTP requests/responses, DHCP data, and credentials from LiveDecryptionSession output, (5) Has get_attack_surfaces() method returning categorized findings (credentials, keys, network info, identifiers).",
+    "Add a PyWhatCallback class that can be passed as a callback to LiveDecryptionSession - processes each decrypted frame through pyWhat/fallback analyzer in real-time, accumulates findings.",
+    "Integrate PyWhatAnalyzer into ReconEngine: add optional pywhat_enabled parameter, when enabled create PyWhatCallback and pass to LiveDecryptionSession as the callback, log identified attack surfaces during recon.",
+    "Create tests/test_pywhat_analyzer.py with unit tests: test analyze() with various input strings (API keys, hashes, URLs, IPs), test analyze_traffic() with mock decrypted summary, test fallback mode when pywhat not installed, test PyWhatCallback integration.",
+    "Update posframework/__init__.py to export PyWhatAnalyzer.",
+    "Update requirements.txt to list pywhat as an optional dependency."
+  ],
+  "acceptance_criteria": [
+    "posframework/pywhat_analyzer.py passes AST validation",
+    "tests/test_pywhat_analyzer.py passes AST validation",
+    "PyWhatAnalyzer works without pywhat installed (fallback regex mode)",
+    "PyWhatAnalyzer.analyze() identifies at minimum: API keys, hashes (MD5/SHA), URLs, IPs, emails, JWTs",
+    "PyWhatCallback integrates with LiveDecryptionSession callback interface",
+    "ReconEngine accepts pywhat_enabled parameter",
+    "posframework/__init__.py exports new class without syntax errors"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('posframework/pywhat_analyzer.py').read()); print('pywhat_analyzer.py: OK')\"",
+    "python3 -c \"import ast; ast.parse(open('tests/test_pywhat_analyzer.py').read()); print('test_pywhat_analyzer.py: OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/__init__.py').read()); print('__init__.py: OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/recon.py').read()); print('recon.py: OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

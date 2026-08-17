@@ -35,6 +35,7 @@ from .intel import is_pos_vendor, is_pos_ssid
 from .crypto import parse_rsn_ie, parse_wpa_ie, classify_security
 from .wireshark_capture import WiresharkCapture
 from .tshark_decrypt import TsharkDecryptionEngine, LiveDecryptionSession
+from .pywhat_analyzer import PyWhatAnalyzer, PyWhatCallback
 from .monitor_mode import (
     setup_monitor_mode, teardown_monitor_mode,
     WindowsMonitorManager, check_npcap_monitor_support
@@ -94,7 +95,7 @@ class ReconEngine:
     """
 
     def __init__(self, interface, db, channels=None, channel_hop=True,
-                 tshark_psk=None, tshark_ssid=None):
+                 tshark_psk=None, tshark_ssid=None, pywhat_enabled=False):
         self.interface = interface
         self.db = db
         self.channels = channels or CHANNELS_24GHZ
@@ -116,6 +117,9 @@ class ReconEngine:
         self._tshark_psk = tshark_psk
         self._tshark_ssid = tshark_ssid
         self._decrypt_session: 'LiveDecryptionSession | None' = None
+        # pyWhat attack surface analysis
+        self._pywhat_enabled = pywhat_enabled
+        self._pywhat_callback: 'PyWhatCallback | None' = None
 
     @lru_cache(maxsize=16384)
     def _get_vendor(self, mac: str) -> str:
@@ -597,6 +601,21 @@ class ReconEngine:
                 f"{len(summary['dhcp_leases'])} DHCP, "
                 f"{len(summary['credentials'])} credentials"
             )
+            # Log pyWhat attack surface findings if enabled
+            if self._pywhat_callback:
+                surfaces = self._pywhat_callback.analyzer.get_attack_surfaces()
+                total_findings = sum(len(v) for v in surfaces.values())
+                if total_findings > 0:
+                    log.info(
+                        f"[PYWHAT] Attack surfaces identified: {total_findings} total - "
+                        f"creds:{len(surfaces['credentials'])}, "
+                        f"keys:{len(surfaces['keys'])}, "
+                        f"network:{len(surfaces['network'])}, "
+                        f"hashes:{len(surfaces['hashes'])}, "
+                        f"financial:{len(surfaces['financial'])}, "
+                        f"crypto:{len(surfaces['crypto'])}"
+                    )
+                self._pywhat_callback = None
             self._decrypt_session = None
         
         # Teardown monitor mode (both platforms)
@@ -613,7 +632,17 @@ class ReconEngine:
 
     def _start_decrypt_session(self):
         """Start a live tshark decryption session alongside the scapy sniffer."""
-        session = LiveDecryptionSession(callback=self._handle_decrypted_data)
+        # Determine callback: use PyWhatCallback wrapping our handler if enabled
+        if self._pywhat_enabled:
+            self._pywhat_callback = PyWhatCallback(
+                chain=self._handle_decrypted_data
+            )
+            callback = self._pywhat_callback
+            log.info("pyWhat attack surface analysis enabled for decrypted traffic")
+        else:
+            callback = self._handle_decrypted_data
+
+        session = LiveDecryptionSession(callback=callback)
         started = session.start(
             interface=self.interface,
             psk=self._tshark_psk,
