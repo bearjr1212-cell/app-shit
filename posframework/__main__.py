@@ -272,7 +272,7 @@ def main():
         return
 
     # Modes that don't need an interface
-    if args.mode in ("analyze", "export"):
+    if args.mode in ("analyze", "export", "gui"):
         pass
     else:
         channels = CHANNELS_24GHZ
