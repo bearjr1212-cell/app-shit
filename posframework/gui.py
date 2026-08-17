@@ -159,9 +159,9 @@ except ImportError:
     LDAPCapture = None
 
 try:
-    from .cloud_cred_detector import CloudCredDetector
+    from .cloud_cred_detector import CloudCredentialDetector
 except ImportError:
-    CloudCredDetector = None
+    CloudCredentialDetector = None
 
 try:
     from .cert_auth_detector import CertAuthDetector
@@ -169,24 +169,24 @@ except ImportError:
     CertAuthDetector = None
 
 try:
-    from .browser_cred_extract import BrowserCredExtract
+    from .browser_cred_extract import BrowserCredentialExtractor
 except ImportError:
-    BrowserCredExtract = None
+    BrowserCredentialExtractor = None
 
 try:
-    from .cred_sprayer import CredSprayer
+    from .cred_sprayer import CredentialSprayer
 except ImportError:
-    CredSprayer = None
+    CredentialSprayer = None
 
 try:
-    from .cred_enrichment import CredEnrichment
+    from .cred_enrichment import CredentialEnrichment
 except ImportError:
-    CredEnrichment = None
+    CredentialEnrichment = None
 
 try:
-    from .cred_correlation import CredCorrelation
+    from .cred_correlation import CredentialCorrelationEngine
 except ImportError:
-    CredCorrelation = None
+    CredentialCorrelationEngine = None
 
 try:
     from .client_profiler import ClientProfiler
@@ -257,9 +257,9 @@ except ImportError:
     HashcatIntegration = None
 
 try:
-    from .john_integration import JohnIntegration
+    from .john_integration import JohnManager
 except ImportError:
-    JohnIntegration = None
+    JohnManager = None
 
 # ---- Harvester/Decryption modules ----
 try:
@@ -369,9 +369,9 @@ except ImportError:
     RadioManager = None
 
 try:
-    from .monitor_manager import MonitorManager
+    from .monitor_manager import EnhancedMonitorManager
 except ImportError:
-    MonitorManager = None
+    EnhancedMonitorManager = None
 
 try:
     from .chip_detector import ChipDetector
@@ -384,9 +384,10 @@ except ImportError:
     ConfigLoader = None
 
 try:
-    from .net_utils import NetUtils
+    from .net_utils import parse_cidr, get_interface_ip
 except ImportError:
-    NetUtils = None
+    parse_cidr = None
+    get_interface_ip = None
 
 
 # ---- Version ----
@@ -469,7 +470,7 @@ SORT_MODES = ["rssi", "security", "pos", "channel", "clients", "ssid"]
 # ---- Engine status tracking ----
 
 class EngineStatus:
-    """Track status of a module engine."""
+    """Track status of a module engine (thread-safe)."""
     IDLE = "IDLE"
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
@@ -479,9 +480,20 @@ class EngineStatus:
         self.name = name
         self.engine_class = engine_class
         self.engine = None
-        self.status = self.IDLE
+        self._status = self.IDLE
         self.error_msg = ""
         self.start_time: Optional[float] = None
+        self._lock = threading.Lock()
+
+    @property
+    def status(self) -> str:
+        with self._lock:
+            return self._status
+
+    @status.setter
+    def status(self, value: str):
+        with self._lock:
+            self._status = value
 
     @property
     def available(self) -> bool:
@@ -549,6 +561,9 @@ class TerminalUI:
         self.menu_selected = 0
         self.stdscr = None
 
+        # Thread safety lock for shared mutable state accessed from daemon threads
+        self._state_lock = threading.Lock()
+
         # Log handler
         self.log_handler = CursesLogHandler()
         self.log_handler.setFormatter(
@@ -614,12 +629,12 @@ class TerminalUI:
             "ntlm": EngineStatus("NTLM Capture", NTLMCapture),
             "kerberos": EngineStatus("Kerberos Capture", KerberosCapture),
             "ldap": EngineStatus("LDAP Capture", LDAPCapture),
-            "cloud": EngineStatus("Cloud Credential Detect", CloudCredDetector),
+            "cloud": EngineStatus("Cloud Credential Detect", CloudCredentialDetector),
             "cert_auth": EngineStatus("Certificate Auth Detect", CertAuthDetector),
-            "browser": EngineStatus("Browser Cred Extract", BrowserCredExtract),
-            "sprayer": EngineStatus("Credential Sprayer", CredSprayer),
-            "enrichment": EngineStatus("Credential Enrichment", CredEnrichment),
-            "correlation": EngineStatus("Credential Correlation", CredCorrelation),
+            "browser": EngineStatus("Browser Cred Extract", BrowserCredentialExtractor),
+            "sprayer": EngineStatus("Credential Sprayer", CredentialSprayer),
+            "enrichment": EngineStatus("Credential Enrichment", CredentialEnrichment),
+            "correlation": EngineStatus("Credential Correlation", CredentialCorrelationEngine),
         }
 
         # MITM engines
@@ -738,9 +753,9 @@ class TerminalUI:
                 self.radio_manager = RadioManager()
             except Exception:
                 pass
-        if MonitorManager is not None:
+        if EnhancedMonitorManager is not None:
             try:
-                self.monitor_manager = MonitorManager()
+                self.monitor_manager = EnhancedMonitorManager()
             except Exception:
                 pass
         if ChipDetector is not None:
@@ -1440,7 +1455,7 @@ class TerminalUI:
         y += 2
         menu_items = [
             ("Start Hashcat", HashcatIntegration is not None),
-            ("Start John", JohnIntegration is not None),
+            ("Start John", JohnManager is not None),
             ("Stop Cracking", self.cracking_active),
             (f"Mode: {self.cracking_mode}", True),
             ("Select Wordlist", True),
@@ -1837,7 +1852,8 @@ class TerminalUI:
             if key in engines:
                 engine = engines[key]
                 if not engine.is_running:
-                    engine.toggle()
+                    kwargs = self._build_engine_kwargs(key, group.replace("_attacks", "").replace("_modules", ""))
+                    engine.toggle(**kwargs)
                     self.status_message = f"Started: {engine.name}"
                 else:
                     self.status_message = f"Already running: {engine.name}"
@@ -1849,16 +1865,126 @@ class TerminalUI:
                     self.status_message = f"Profile: {profile.get('device_type', 'unknown')}"
 
     # ================================================================
+    # ENGINE KWARGS BUILDER
+    # ================================================================
+
+    def _build_engine_kwargs(self, key: str, category: str) -> Dict[str, Any]:
+        """Build constructor kwargs for an engine based on its type and selected target.
+
+        Returns a dict of kwargs to pass to engine.toggle() / engine.start().
+        Each engine requires different arguments (interface, target, db, etc.).
+        """
+        kwargs: Dict[str, Any] = {}
+
+        # Common: interface
+        iface = self.monitor_iface
+
+        # Get target info
+        target_bssid = ""
+        target_client = ""
+        target_ssid = ""
+        if self.selected_target:
+            target_bssid = self.selected_target.get("bssid", "")
+            target_ssid = self.selected_target.get("ssid", "")
+        if self.selected_client:
+            target_client = self.selected_client.get("mac", "")
+
+        if category == "wifi":
+            # WiFi attack engines
+            if key == "deauth":
+                kwargs = {"interface": iface}
+                if target_bssid:
+                    kwargs["target_bssid"] = target_bssid
+            elif key == "beacons":
+                kwargs = {"interface": iface}
+            elif key == "karma":
+                kwargs = {"interface": iface}
+            elif key == "rogueap":
+                kwargs = {"interface": iface}
+            elif key == "ap_clone":
+                kwargs = {"interface": iface, "db": self.db}
+                if target_bssid:
+                    kwargs["target_bssid"] = target_bssid
+            elif key == "krack":
+                kwargs = {"interface": iface}
+                if target_client:
+                    kwargs["target_client"] = target_client
+                if target_bssid:
+                    kwargs["target_bssid"] = target_bssid
+            elif key in ("dos_cts", "dos_beacon", "dos_qos", "dos_frag"):
+                mode_map = {
+                    "dos_cts": "cts_flood",
+                    "dos_beacon": "beacon_exhaust",
+                    "dos_qos": "qos_null",
+                    "dos_frag": "fragment",
+                }
+                kwargs = {"interface": iface, "mode": mode_map.get(key, "cts_flood")}
+                if target_bssid:
+                    kwargs["target_bssid"] = target_bssid
+            elif key == "client_iso":
+                kwargs = {"interface": iface}
+                if target_bssid:
+                    kwargs["target_bssid"] = target_bssid
+            elif key == "net_disrupt":
+                kwargs = {"interface": iface}
+                if target_bssid:
+                    kwargs["target_bssid"] = target_bssid
+            elif key in ("wpa3_attack", "wpa3_detect"):
+                kwargs = {"interface": iface}
+                if target_bssid:
+                    kwargs["target_bssid"] = target_bssid
+            elif key == "handshake":
+                kwargs = {"interface": iface}
+                if target_bssid:
+                    kwargs["target_bssid"] = target_bssid
+            elif key == "pmkid":
+                kwargs = {"interface": iface}
+                if target_bssid:
+                    kwargs["target_bssid"] = target_bssid
+            elif key == "multi_cap":
+                kwargs = {"interface": iface}
+            else:
+                kwargs = {"interface": iface}
+
+        elif category == "cred":
+            # Credential engines generally need interface
+            kwargs = {"interface": iface}
+
+        elif category == "mitm":
+            # MITM engines need interface and target/gateway
+            kwargs = {"interface": iface}
+            if key == "arp":
+                if self.mitm_target_ip:
+                    kwargs["target_ip"] = self.mitm_target_ip
+                if self.mitm_gateway_ip:
+                    kwargs["gateway_ip"] = self.mitm_gateway_ip
+            elif key == "dns_spoof":
+                if self.dns_spoof_domain:
+                    kwargs["domain"] = self.dns_spoof_domain
+
+        elif category == "network":
+            kwargs = {"interface": iface}
+
+        elif category == "ble_sdr":
+            kwargs = {"interface": iface}
+
+        else:
+            kwargs = {"interface": iface}
+
+        return kwargs
+
+    # ================================================================
     # WIFI ATTACK ACTIONS
     # ================================================================
 
     def _handle_wifi_attack_action(self):
-        """Toggle selected WiFi attack engine."""
+        """Toggle selected WiFi attack engine with proper constructor args."""
         items = list(self.wifi_attacks.items())
         idx = self.menu_selected
         if 0 <= idx < len(items):
             key, engine = items[idx]
-            engine.toggle()
+            kwargs = self._build_engine_kwargs(key, "wifi")
+            engine.toggle(**kwargs)
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
             else:
@@ -1869,12 +1995,13 @@ class TerminalUI:
     # ================================================================
 
     def _handle_cred_attack_action(self):
-        """Toggle selected credential attack engine."""
+        """Toggle selected credential attack engine with proper constructor args."""
         items = list(self.cred_attacks.items())
         idx = self.menu_selected
         if 0 <= idx < len(items):
             key, engine = items[idx]
-            engine.toggle()
+            kwargs = self._build_engine_kwargs(key, "cred")
+            engine.toggle(**kwargs)
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
             else:
@@ -1890,7 +2017,8 @@ class TerminalUI:
         idx = self.menu_selected
         if 0 <= idx < len(items):
             key, engine = items[idx]
-            engine.toggle()
+            kwargs = self._build_engine_kwargs(key, "mitm")
+            engine.toggle(**kwargs)
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
             else:
@@ -1906,7 +2034,8 @@ class TerminalUI:
         idx = self.menu_selected
         if 0 <= idx < len(items):
             key, engine = items[idx]
-            engine.toggle()
+            kwargs = self._build_engine_kwargs(key, "network")
+            engine.toggle(**kwargs)
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
             else:
@@ -1922,7 +2051,8 @@ class TerminalUI:
         idx = self.menu_selected
         if 0 <= idx < len(items):
             key, engine = items[idx]
-            engine.toggle()
+            kwargs = self._build_engine_kwargs(key, "ble_sdr")
+            engine.toggle(**kwargs)
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
             else:
@@ -1963,7 +2093,7 @@ class TerminalUI:
                 kwargs["psk"] = self.harvester_psk
                 kwargs["ssid"] = self.harvester_ssid
             if self.harvester_wep_key:
-                kwargs["wep_key"] = self.harvester_wep_key
+                kwargs["wep_keys"] = [self.harvester_wep_key]
             kwargs["interface"] = self.monitor_iface
 
             self.harvester_session.start(**kwargs)
@@ -2021,11 +2151,11 @@ class TerminalUI:
 
     def _start_john(self):
         """Start John the Ripper cracking."""
-        if JohnIntegration is None:
+        if JohnManager is None:
             self.status_message = "John module not available"
             return
         try:
-            self.john_engine = JohnIntegration()
+            self.john_engine = JohnManager()
             self.cracking_active = True
             self.status_message = "John started"
         except Exception as e:
@@ -2119,18 +2249,26 @@ class TerminalUI:
             self.autopwn_engine = AutoPwnEngine(config=config)
             self.autopwn_running = True
             self.autopwn_state = "SCANNING"
+            self._autopwn_loop = None
 
             # Run async engine in background thread
             def _run_autopwn():
                 try:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
+                    self._autopwn_loop = loop
                     loop.run_until_complete(self.autopwn_engine.start())
                 except Exception as e:
-                    self.autopwn_state = "FAILED"
-                    self.status_message = f"AutoPwn error: {e}"
+                    with self._state_lock:
+                        self.autopwn_state = "FAILED"
+                        self.status_message = f"AutoPwn error: {e}"
                 finally:
-                    self.autopwn_running = False
+                    with self._state_lock:
+                        self.autopwn_running = False
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
 
             t = threading.Thread(target=_run_autopwn, daemon=True)
             t.start()
@@ -2143,13 +2281,24 @@ class TerminalUI:
         """Stop AutoPwn mode."""
         if self.autopwn_engine:
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self.autopwn_engine.stop())
+                loop = getattr(self, '_autopwn_loop', None)
+                if loop and loop.is_running():
+                    # Schedule stop on the engine's own event loop
+                    loop.call_soon_threadsafe(
+                        lambda: asyncio.ensure_future(self.autopwn_engine.stop())
+                    )
+                else:
+                    # Fallback: create new loop only if background loop is gone
+                    fallback_loop = asyncio.new_event_loop()
+                    try:
+                        fallback_loop.run_until_complete(self.autopwn_engine.stop())
+                    finally:
+                        fallback_loop.close()
             except Exception:
                 pass
         self.autopwn_running = False
         self.autopwn_state = "IDLE"
+        self._autopwn_loop = None
         self.status_message = "AutoPwn stopped"
 
     # ================================================================
@@ -2159,7 +2308,29 @@ class TerminalUI:
     def _get_access_points(self) -> List[Dict]:
         """Get access points from database sorted by current sort mode."""
         try:
-            aps = self.db.get_access_points() if hasattr(self.db, 'get_access_points') else []
+            # Use get_pos_access_points() which returns tuples:
+            # (bssid, ssid, channel, vendor, security, rssi)
+            aps = self.db.get_pos_access_points() if hasattr(self.db, 'get_pos_access_points') else []
+
+            # Also get client counts via get_all_ap_clients()
+            client_map = {}
+            if hasattr(self.db, 'get_all_ap_clients'):
+                try:
+                    client_map = self.db.get_all_ap_clients() or {}
+                except Exception:
+                    pass
+
+            if not aps:
+                # Fallback to direct SQL if available
+                try:
+                    cursor = self.db.conn.execute(
+                        "SELECT bssid, ssid, channel, vendor, security, rssi, is_pos "
+                        "FROM access_points ORDER BY rssi DESC"
+                    )
+                    aps = cursor.fetchall()
+                except Exception:
+                    return []
+
             if not aps:
                 return []
 
@@ -2168,23 +2339,24 @@ class TerminalUI:
             for ap in aps:
                 if isinstance(ap, dict):
                     ap_list.append(ap)
-                elif hasattr(ap, '__dict__'):
-                    ap_list.append(vars(ap))
                 elif isinstance(ap, (list, tuple)):
-                    ap_list.append({
-                        "bssid": ap[0] if len(ap) > 0 else "",
+                    bssid = ap[0] if len(ap) > 0 else ""
+                    ap_dict = {
+                        "bssid": bssid,
                         "ssid": ap[1] if len(ap) > 1 else "",
                         "channel": ap[2] if len(ap) > 2 else 0,
-                        "security": ap[3] if len(ap) > 3 else "",
-                        "rssi": ap[4] if len(ap) > 4 else -100,
-                        "vendor": ap[5] if len(ap) > 5 else "",
+                        "vendor": ap[3] if len(ap) > 3 else "",
+                        "security": ap[4] if len(ap) > 4 else "",
+                        "rssi": ap[5] if len(ap) > 5 else -100,
                         "is_pos": ap[6] if len(ap) > 6 else False,
-                        "client_count": ap[7] if len(ap) > 7 else 0,
-                    })
+                        "client_count": len(client_map.get(bssid, [])),
+                    }
+                    ap_list.append(ap_dict)
+                elif hasattr(ap, '__dict__'):
+                    ap_list.append(vars(ap))
 
             # Apply sorting
             sort_key = SORT_MODES[self.sort_mode]
-            reverse = True
             if sort_key == "rssi":
                 ap_list.sort(key=lambda x: x.get("rssi", -100), reverse=True)
             elif sort_key == "security":
@@ -2213,33 +2385,44 @@ class TerminalUI:
     def _get_clients(self) -> List[Dict]:
         """Get clients with profile data."""
         try:
-            clients = self.db.get_clients() if hasattr(self.db, 'get_clients') else []
-            if not clients:
-                return []
-
+            # Use get_all_ap_clients() which returns {bssid: [client_macs]}
+            # and get_clients_for_bssid(bssid) which returns [(mac, rssi), ...]
             client_list = []
-            for c in clients:
-                if isinstance(c, dict):
-                    client_list.append(c)
-                elif hasattr(c, '__dict__'):
-                    client_list.append(vars(c))
-                elif isinstance(c, (list, tuple)):
-                    client_list.append({
-                        "mac": c[0] if len(c) > 0 else "",
-                        "vendor": c[1] if len(c) > 1 else "",
-                        "associated_ap": c[2] if len(c) > 2 else "",
-                        "rssi": c[3] if len(c) > 3 else -100,
-                    })
+
+            if hasattr(self.db, 'get_all_ap_clients'):
+                ap_clients = self.db.get_all_ap_clients() or {}
+                for bssid, macs in ap_clients.items():
+                    if isinstance(macs, list):
+                        for mac_entry in macs:
+                            if isinstance(mac_entry, (list, tuple)):
+                                mac = mac_entry[0] if len(mac_entry) > 0 else ""
+                                rssi = mac_entry[1] if len(mac_entry) > 1 else -100
+                            else:
+                                mac = str(mac_entry)
+                                rssi = -100
+                            client_list.append({
+                                "mac": mac,
+                                "vendor": "",
+                                "associated_ap": bssid,
+                                "rssi": rssi,
+                            })
+
+            if not client_list:
+                return []
 
             # Enrich with profiler data
             if self.client_profiler:
                 for client in client_list:
                     mac = client.get("mac", "")
                     if mac:
-                        profile = self.client_profiler.get_profile(mac)
-                        if profile:
-                            client["os"] = profile.get("os", "")
-                            client["device_type"] = profile.get("device_type", "")
+                        try:
+                            profile = self.client_profiler.get_profile(mac)
+                            if profile:
+                                client["os"] = profile.get("os", "")
+                                client["device_type"] = profile.get("device_type", "")
+                                client["vendor"] = profile.get("vendor", client["vendor"])
+                        except Exception:
+                            pass
 
             # Apply filter
             if self.filter_text:
@@ -2256,10 +2439,12 @@ class TerminalUI:
     def _get_credentials_count(self) -> int:
         """Get total credentials discovered."""
         try:
-            if hasattr(self.db, 'get_credentials'):
-                creds = self.db.get_credentials()
-                return len(creds) if creds else 0
-            return 0
+            # Use direct SQL since POSDatabase has no get_credentials() method
+            cursor = self.db.conn.execute(
+                "SELECT COUNT(*) FROM credentials"
+            )
+            row = cursor.fetchone()
+            return row[0] if row else 0
         except Exception:
             return 0
 
