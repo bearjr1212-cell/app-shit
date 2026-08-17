@@ -24,23 +24,28 @@ class SignalTargeting:
     def __init__(self, rssi_threshold=-70):
         self.rssi_threshold = rssi_threshold
         self._client_rssis = defaultdict(lambda: deque(maxlen=100))  # client_mac -> bounded deque of RSSI samples
+        self._running_sum = {}  # client_mac -> running sum of samples in deque
         self._cached_avg = {}  # client_mac -> running average RSSI
         self._priority_queue = []  # Sorted list of (rssi, client_mac, bssid)
 
     def add_sample(self, client_mac, bssid, rssi):
-        """Record an RSSI sample for a client and update running average."""
+        """Record an RSSI sample for a client and update running average (O(1))."""
         samples = self._client_rssis[client_mac]
-        if client_mac in self._cached_avg and len(samples) > 0:
-            # If deque is full, recompute average after oldest is evicted
+        if client_mac in self._running_sum and len(samples) > 0:
             if len(samples) == samples.maxlen:
+                # Deque is full: the leftmost element will be evicted by append
+                evicted = samples[0]
+                self._running_sum[client_mac] -= evicted
+                self._running_sum[client_mac] += rssi
                 samples.append(rssi)
-                self._cached_avg[client_mac] = sum(samples) / len(samples)
             else:
-                n = len(samples) + 1
-                old_avg = self._cached_avg[client_mac]
-                self._cached_avg[client_mac] = (old_avg * (n - 1) + rssi) / n
+                # Deque not full yet: just add to running sum
+                self._running_sum[client_mac] += rssi
                 samples.append(rssi)
+            self._cached_avg[client_mac] = self._running_sum[client_mac] / len(samples)
         else:
+            # First sample for this client
+            self._running_sum[client_mac] = rssi
             self._cached_avg[client_mac] = rssi
             samples.append(rssi)
 

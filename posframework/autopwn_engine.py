@@ -156,6 +156,8 @@ class AutoPwnEngine:
         config: Optional[AutoPwnConfig] = None,
         wifi_scanner: Any = None,
         ble_scanner: Any = None,
+        sdr_manager: Any = None,
+        gps_client: Any = None,
         capture_manager: Any = None,
         eviltwin_manager: Any = None,
         cracker: Any = None,
@@ -165,6 +167,8 @@ class AutoPwnEngine:
         # External components (posframework engines)
         self._wifi_scanner = wifi_scanner
         self._ble_scanner = ble_scanner
+        self._sdr_manager = sdr_manager
+        self._gps_client = gps_client
         self._capture_manager = capture_manager
         self._eviltwin_manager = eviltwin_manager
         self._cracker = cracker
@@ -387,7 +391,7 @@ class AutoPwnEngine:
                 await asyncio.sleep(5.0)
 
     async def _scan_phase(self) -> None:
-        """Scan for targets using the wifi_scanner via asyncio.to_thread."""
+        """Scan for targets using wifi_scanner, ble_scanner, and other available scanners."""
         logger.debug("Starting scan phase")
 
         if self._wifi_scanner:
@@ -430,6 +434,74 @@ class AutoPwnEngine:
 
             except Exception as e:
                 logger.error("WiFi scan error: %s", e)
+
+        # BLE scanning (optional)
+        if self._ble_scanner:
+            try:
+                if asyncio.iscoroutinefunction(
+                    getattr(self._ble_scanner, "scan", None)
+                ):
+                    ble_results = await self._ble_scanner.scan()
+                else:
+                    ble_results = await asyncio.to_thread(
+                        self._ble_scanner.scan,
+                    )
+
+                if ble_results:
+                    ble_targets = await self._target_analyzer.process_scan_results(
+                        ble_results,
+                        target_type=TargetType.BLE_DEVICE,
+                    )
+                    for target in ble_targets:
+                        await self._notify_target_found(target)
+
+                    logger.debug("BLE scan found %d devices", len(ble_results))
+
+            except Exception as e:
+                logger.error("BLE scan error: %s", e)
+
+        # SDR scanning (optional)
+        if self._sdr_manager:
+            try:
+                if asyncio.iscoroutinefunction(
+                    getattr(self._sdr_manager, "scan", None)
+                ):
+                    sdr_results = await self._sdr_manager.scan()
+                elif hasattr(self._sdr_manager, "scan"):
+                    sdr_results = await asyncio.to_thread(
+                        self._sdr_manager.scan,
+                    )
+                else:
+                    sdr_results = None
+
+                if sdr_results:
+                    logger.debug("SDR scan found %d signals", len(sdr_results))
+
+            except Exception as e:
+                logger.error("SDR scan error: %s", e)
+
+        # GPS position update (optional)
+        if self._gps_client:
+            try:
+                if asyncio.iscoroutinefunction(
+                    getattr(self._gps_client, "get_position", None)
+                ):
+                    position = await self._gps_client.get_position()
+                elif hasattr(self._gps_client, "get_position"):
+                    position = await asyncio.to_thread(
+                        self._gps_client.get_position,
+                    )
+                else:
+                    position = None
+
+                if position:
+                    session = self._session_manager.current_session
+                    if session and hasattr(session, "last_position"):
+                        session.last_position = position
+                    logger.debug("GPS position: %s", position)
+
+            except Exception as e:
+                logger.error("GPS update error: %s", e)
 
     async def _analyze_phase(self) -> None:
         """Analyze and prioritize targets."""

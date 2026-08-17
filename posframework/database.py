@@ -29,7 +29,6 @@ class POSDatabase:
         self._lock = threading.Lock()
         self._setup_tables()
         self._last_commit = time.monotonic()
-        self._commit_lock = threading.Lock()
         self._write_buffer = []
         self._buffer_lock = threading.Lock()
 
@@ -197,13 +196,17 @@ class POSDatabase:
             self.conn.commit()
 
     def _maybe_commit(self):
-        """Flush buffered writes when interval elapsed or buffer is full."""
+        """Flush buffered writes when interval elapsed or buffer is full.
+
+        Uses a single lock (_buffer_lock) to guard both buffer access and
+        commit timing, preventing the deadlock that occurred when
+        _buffer_lock and _commit_lock were acquired in different orders.
+        """
         now = time.monotonic()
-        with self._commit_lock:
-            buffer_size = len(self._write_buffer)
+        with self._buffer_lock:
             elapsed = now - self._last_commit >= COMMIT_INTERVAL
-            if elapsed or buffer_size >= self.BATCH_FLUSH_SIZE:
-                self._flush_buffer()
+            if elapsed or len(self._write_buffer) >= self.BATCH_FLUSH_SIZE:
+                self._flush_buffer_unlocked()
                 self.conn.commit()
                 self._last_commit = now
 
@@ -212,23 +215,26 @@ class POSDatabase:
         with self._buffer_lock:
             self._write_buffer.append((sql, params))
             if len(self._write_buffer) >= self.BATCH_FLUSH_SIZE:
-                self._flush_buffer()
-                with self._commit_lock:
-                    self.conn.commit()
-                    self._last_commit = time.monotonic()
+                self._flush_buffer_unlocked()
+                self.conn.commit()
+                self._last_commit = time.monotonic()
+
+    def _flush_buffer_unlocked(self):
+        """Execute all buffered write operations. Caller must hold _buffer_lock."""
+        if not self._write_buffer:
+            return
+        with self._lock:
+            for sql, params in self._write_buffer:
+                try:
+                    self.cursor.execute(sql, params)
+                except sqlite3.Error as e:
+                    log.debug(f"Buffered write error: {e}")
+        self._write_buffer.clear()
 
     def _flush_buffer(self):
-        """Execute all buffered write operations."""
+        """Execute all buffered write operations (acquires _buffer_lock)."""
         with self._buffer_lock:
-            if not self._write_buffer:
-                return
-            with self._lock:
-                for sql, params in self._write_buffer:
-                    try:
-                        self.cursor.execute(sql, params)
-                    except sqlite3.Error as e:
-                        log.debug(f"Buffered write error: {e}")
-            self._write_buffer.clear()
+            self._flush_buffer_unlocked()
 
     def update_ap(self, bssid, ssid, vendor, channel, security, rssi, is_pos, is_hidden):
         now = datetime.now().isoformat(timespec='seconds')

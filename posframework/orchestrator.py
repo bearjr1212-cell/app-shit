@@ -837,8 +837,8 @@ class _HandshakeCaptureAdapter:
         """
         Wait for a complete 4-way handshake for the target BSSID.
 
-        Polls HandshakeCapture for completion, checking every poll_interval
-        seconds until timeout.
+        Polls HandshakeCapture.has_handshake_for_bssid() (public API)
+        every poll_interval seconds until timeout.
         """
         import asyncio
         elapsed = 0.0
@@ -846,33 +846,12 @@ class _HandshakeCaptureAdapter:
             await asyncio.sleep(poll_interval)
             elapsed += poll_interval
 
-            # Check for complete handshake via various possible APIs
-            if hasattr(self._handshakes, 'is_complete_for_bssid'):
-                complete = self._handshakes.is_complete_for_bssid(bssid)
-            elif hasattr(self._handshakes, 'get_complete_for_bssid'):
-                complete = self._handshakes.get_complete_for_bssid(bssid)
-            elif hasattr(self._handshakes, 'has_complete_handshake'):
-                complete = self._handshakes.has_complete_handshake(bssid)
-            else:
-                # Check all clients for this BSSID
-                complete = False
-                if hasattr(self._handshakes, '_handshakes'):
-                    for key, frames in self._handshakes._handshakes.items():
-                        if bssid.lower() in key.lower():
-                            # Need M1+M2 minimum for hashcat
-                            if len(frames) >= 2:
-                                complete = True
-                                break
+            # Use the stable public API for handshake checking
+            complete = self._handshakes.has_handshake_for_bssid(bssid, min_frames=2)
 
             if complete:
-                # Export the capture
-                pcap_file = None
-                if hasattr(self._handshakes, 'export_pcap_for_bssid'):
-                    pcap_file = self._handshakes.export_pcap_for_bssid(bssid)
-                elif hasattr(self._handshakes, 'export_all'):
-                    exports = self._handshakes.export_all()
-                    if exports:
-                        pcap_file = exports[0] if isinstance(exports, list) else exports
+                # Export the capture via public API
+                pcap_file = self._handshakes.export_pcap_for_bssid(bssid)
 
                 return {
                     "handshake": True,

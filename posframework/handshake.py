@@ -334,6 +334,45 @@ class HandshakeCapture:
                     exported.append(filename)
         return exported
 
+    def has_handshake_for_bssid(self, bssid, min_frames=2):
+        """
+        Check if a handshake (at least min_frames EAPOL messages) exists
+        for any client associated with the given BSSID.
+
+        This is the stable public API for checking handshake availability.
+        Consumers should use this instead of accessing internal _capture dict.
+
+        Args:
+            bssid: AP BSSID to check (case-insensitive).
+            min_frames: Minimum number of EAPOL messages required (default 2
+                        for M1+M2, set to 4 for full 4-way handshake).
+
+        Returns:
+            True if a handshake meeting the threshold exists.
+        """
+        bssid_lower = bssid.lower()
+        for (client_mac, cap_bssid), data in self._capture.items():
+            if cap_bssid.lower() == bssid_lower:
+                if len(data["messages"]) >= min_frames:
+                    return True
+        return False
+
+    def export_pcap_for_bssid(self, bssid):
+        """
+        Export handshake PCAP for the first complete capture matching a BSSID.
+
+        Args:
+            bssid: AP BSSID to export for (case-insensitive).
+
+        Returns:
+            Filename of the exported PCAP, or None if no suitable capture found.
+        """
+        bssid_lower = bssid.lower()
+        for (client_mac, cap_bssid), data in list(self._capture.items()):
+            if cap_bssid.lower() == bssid_lower and len(data["messages"]) >= 2:
+                return self.export_pcap(client_mac, cap_bssid)
+        return None
+
     def get_stats(self):
         """Return capture statistics."""
         total = sum(1 for d in self._capture.values() if len(d["messages"]) >= 4)
