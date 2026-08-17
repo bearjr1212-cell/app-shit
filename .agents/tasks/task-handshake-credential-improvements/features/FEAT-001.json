@@ -2,7 +2,7 @@
   "id": "FEAT-001",
   "type": "feat",
   "description": "Enhanced handshake capture: PMKID clientless capture, deduplication, hashcat .hccapx/.22000 export, multi-AP parallel capture, FT (802.11r) handshake detection, and beacon frame inclusion in PCAP",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Create posframework/pmkid.py - PMKIDCapture class that sniffs for EAPOL Message 1 frames, extracts PMKID from RSN IE (first 16 bytes of PMKID field in Key Data), exports in hashcat mode 22000 format (WPA*01*PMKID*MAC_AP*MAC_STA*ESSID_HEX). Include start()/stop()/get_stats() lifecycle following HandshakeSniffer pattern.",
     "Add handshake deduplication to posframework/handshake.py - In HandshakeCapture, add a _exported_pairs set that tracks (client_mac, bssid) pairs already exported. In add_frame(), skip if pair already in _exported_pairs. In export_pcap(), add the pair to _exported_pairs. Add clear_dedup() method to reset.",
@@ -28,5 +28,5 @@
     "python3 -c \"import ast; ast.parse(open('posframework/__init__.py').read()); print('__init__.py OK')\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All 50 project files parse successfully via ast.parse. PMKID extraction follows KDE format (dd tag, OUI 00:0f:ac:04). FT detection checks for MDIE (IE 54), FTIE (IE 55), RSNIE (IE 48) in reassociation frames. Beacon cache uses bssid as key and prepends to PCAP export. Dedup uses _exported_pairs set checked in both add_frame and export_pcap."
 }
