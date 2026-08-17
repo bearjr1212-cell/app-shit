@@ -1,0 +1,25 @@
+{
+  "project_type": "Python WiFi reconnaissance and attack framework",
+  "language": "Python 3",
+  "build_system": "setuptools via setup.py",
+  "test_framework": "None (user said to skip tests)",
+  "build_command": "python -c \"import posframework\"",
+  "test_command": "python -c \"import posframework; print('Import OK')\"",
+  "verification_instructions": "Run 'python -c \"import posframework\"' to verify the package imports without errors. Check that new modules load correctly.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "pip install -e . (installs scapy, manuf, pyyaml)",
+  "environment_constraints": "No network interfaces available for live testing. Validation is limited to import checks and syntax validation. No test suite exists.",
+  "contribution_requirements": "Push to fix/complete-audit-fixes branch. Do not create a new PR.",
+  "key_patterns": "All modules in posframework/ directory. Each module is a class (e.g., DeauthEngine, ReconEngine). Config constants in config.py. Database layer in database.py with SQLite WAL mode. Orchestrator imports all attack modules statically and instantiates them based on flags. CLI uses argparse with subcommands. MonitorManagerInterface is the abstract base for monitor mode managers.",
+  "relevant_files": [
+    "posframework/config.py",
+    "posframework/orchestrator.py",
+    "posframework/__main__.py",
+    "posframework/__init__.py",
+    "posframework/monitor_mode.py",
+    "posframework/recon.py",
+    "setup.py",
+    "README.md"
+  ],
+  "directory_structure": "Root: setup.py, README.md, CODE_AUDIT_REPORT.md, shell scripts. posframework/: 36+ Python modules including config.py, orchestrator.py, __main__.py, recon.py, monitor_mode.py, deauth.py, beacons.py, rogueap.py, and many attack modules."
+}

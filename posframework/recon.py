@@ -490,14 +490,18 @@ class ReconEngine:
         self._start_time = time.time()
         self._packets_processed = 0
         
-        # Setup monitor mode on Windows
-        if IS_WINDOWS:
-            log.info("Configuring Windows monitor mode...")
+        # Setup monitor mode (platform-appropriate)
+        if IS_WINDOWS or IS_LINUX:
+            platform_name = "Windows" if IS_WINDOWS else "Linux"
+            log.info(f"Configuring {platform_name} monitor mode...")
             from .monitor_mode import setup_monitor_mode
             success, manager = setup_monitor_mode(self.interface)
             if success:
                 self._monitor_manager = manager
-                log.info("Windows monitor mode configured successfully")
+                # Update interface name if it was renamed (Linux monitor mode)
+                if hasattr(manager, 'interface'):
+                    self.interface = manager.interface
+                log.info(f"{platform_name} monitor mode configured successfully")
             else:
                 log.warning("Monitor mode setup failed, using native capture mode")
         
@@ -539,9 +543,10 @@ class ReconEngine:
         self.running = False
         self._print_status()
         
-        # Teardown monitor mode on Windows
-        if IS_WINDOWS and self._monitor_manager:
-            log.info("Tearing down Windows monitor mode...")
+        # Teardown monitor mode (both platforms)
+        if self._monitor_manager:
+            platform_name = "Windows" if IS_WINDOWS else "Linux"
+            log.info(f"Tearing down {platform_name} monitor mode...")
             from .monitor_mode import teardown_monitor_mode
             teardown_monitor_mode(self._monitor_manager)
             self._monitor_manager = None

@@ -1,8 +1,9 @@
 """
-Windows Monitor Mode Manager
+Cross-Platform Monitor Mode Manager
 
-Provides monitor mode management for WiFi interfaces on Windows systems.
-Handles Npcap-based monitoring, chip detection, and interface configuration.
+Provides monitor mode management for WiFi interfaces on both Linux and Windows.
+Linux: Uses 'iw' and 'ip' commands for interface configuration.
+Windows: Handles Npcap-based monitoring, chip detection, and interface configuration.
 """
 
 import os
@@ -264,6 +265,223 @@ class WindowsMonitorManager(MonitorManagerInterface):
         return False
 
 
+class LinuxMonitorManager(MonitorManagerInterface):
+    """Monitor mode manager for Linux systems using iw/ip commands."""
+
+    def __init__(self, interface: str):
+        super().__init__(interface)
+        self._original_interface: str = interface
+        self._monitor_interface: str = f"{interface}mon"
+        self._original_state: Optional[Dict[str, str]] = None
+
+    def _run_cmd(self, cmd: List[str], timeout: int = 10) -> Tuple[bool, str]:
+        """Run a shell command and return (success, output)."""
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            output = result.stdout.strip()
+            if result.returncode != 0:
+                err = result.stderr.strip()
+                log.debug(f"Command failed: {' '.join(cmd)} -> {err}")
+                return (False, err)
+            return (True, output)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            log.error(f"Error running command {' '.join(cmd)}: {e}")
+            return (False, str(e))
+
+    def _save_original_state(self) -> None:
+        """Save the original interface state for later restoration."""
+        self._original_state = {
+            "interface": self._original_interface,
+        }
+        mac = self.get_mac_address()
+        if mac:
+            self._original_state["mac"] = mac
+        log.info(f"Saved original state for {self._original_interface}")
+
+    def _interface_down(self, iface: str) -> bool:
+        """Bring an interface down."""
+        success, _ = self._run_cmd(["ip", "link", "set", "dev", iface, "down"])
+        return success
+
+    def _interface_up(self, iface: str) -> bool:
+        """Bring an interface up."""
+        success, _ = self._run_cmd(["ip", "link", "set", "dev", iface, "up"])
+        return success
+
+    def check_supported(self) -> bool:
+        """Check if the interface supports monitor mode using iw."""
+        success, output = self._run_cmd(["iw", "phy"])
+        if not success:
+            log.warning("iw command not available or failed")
+            return False
+
+        # Check if interface exists
+        success, output = self._run_cmd(["iw", "dev", self._original_interface, "info"])
+        if not success:
+            log.warning(f"Interface '{self._original_interface}' not found")
+            return False
+
+        # Check for monitor mode support in phy capabilities
+        success, output = self._run_cmd(["iw", "phy"])
+        if success and "monitor" in output.lower():
+            log.info(f"Interface '{self._original_interface}' supports monitor mode")
+            return True
+
+        # If we can't determine from phy info, assume support (common case)
+        log.info(f"Assuming monitor mode support for '{self._original_interface}'")
+        return True
+
+    def enable_monitor_mode(self) -> bool:
+        """Enable monitor mode on Linux using iw/ip commands.
+
+        Steps:
+            1. Save original state (MAC, interface name)
+            2. Bring interface down
+            3. Set interface type to monitor
+            4. Rename interface to <iface>mon
+            5. Bring monitor interface up
+        """
+        self._save_original_state()
+        self.original_mac = self.get_mac_address()
+
+        # Bring interface down
+        if not self._interface_down(self._original_interface):
+            log.error(f"Failed to bring down {self._original_interface}")
+            return False
+
+        # Set monitor mode
+        success, _ = self._run_cmd([
+            "iw", "dev", self._original_interface, "set", "type", "monitor"
+        ])
+        if not success:
+            log.error(f"Failed to set monitor mode on {self._original_interface}")
+            # Try to restore interface
+            self._interface_up(self._original_interface)
+            return False
+
+        # Rename interface to monitor name (e.g., wlan0 -> wlan0mon)
+        success, _ = self._run_cmd([
+            "ip", "link", "set", "dev", self._original_interface, "name", self._monitor_interface
+        ])
+        if not success:
+            # Renaming failed, keep original name
+            log.warning(f"Could not rename to {self._monitor_interface}, using {self._original_interface}")
+            self._monitor_interface = self._original_interface
+
+        # Bring monitor interface up
+        if not self._interface_up(self._monitor_interface):
+            log.error(f"Failed to bring up {self._monitor_interface}")
+            return False
+
+        self.interface = self._monitor_interface
+        self.monitor_active = True
+        log.info(f"Monitor mode enabled: {self._monitor_interface}")
+        return True
+
+    def disable_monitor_mode(self) -> bool:
+        """Disable monitor mode and restore the interface to managed mode.
+
+        Steps:
+            1. Bring monitor interface down
+            2. Set interface type back to managed
+            3. Rename interface back to original name
+            4. Restore original MAC if changed
+            5. Bring interface up
+        """
+        if not self.monitor_active:
+            log.info("Monitor mode is not active")
+            return False
+
+        # Bring interface down
+        self._interface_down(self._monitor_interface)
+
+        # Set managed mode
+        self._run_cmd([
+            "iw", "dev", self._monitor_interface, "set", "type", "managed"
+        ])
+
+        # Rename back to original if it was renamed
+        if self._monitor_interface != self._original_interface:
+            self._run_cmd([
+                "ip", "link", "set", "dev", self._monitor_interface,
+                "name", self._original_interface
+            ])
+
+        # Restore original MAC if saved
+        if self._original_state and "mac" in self._original_state:
+            self._run_cmd([
+                "ip", "link", "set", "dev", self._original_interface,
+                "address", self._original_state["mac"]
+            ])
+
+        # Bring interface back up
+        self._interface_up(self._original_interface)
+
+        self.interface = self._original_interface
+        self.monitor_active = False
+        log.info(f"Monitor mode disabled, restored: {self._original_interface}")
+        return True
+
+    def set_channel(self, channel: int) -> bool:
+        """Set the wireless channel using iw."""
+        target_iface = self._monitor_interface if self.monitor_active else self._original_interface
+        success, _ = self._run_cmd([
+            "iw", "dev", target_iface, "set", "channel", str(channel)
+        ])
+        if success:
+            log.debug(f"Channel set to {channel} on {target_iface}")
+        else:
+            log.warning(f"Failed to set channel {channel} on {target_iface}")
+        return success
+
+    def get_mac_address(self) -> Optional[str]:
+        """Get the current MAC address using 'ip link show'."""
+        target_iface = self._monitor_interface if self.monitor_active else self._original_interface
+        success, output = self._run_cmd(["ip", "link", "show", target_iface])
+        if not success:
+            return None
+
+        # Parse MAC from: link/ether aa:bb:cc:dd:ee:ff brd ff:ff:ff:ff:ff:ff
+        mac_match = re.search(
+            r"link/ether\s+([0-9a-fA-F:]{17})",
+            output,
+        )
+        if mac_match:
+            return mac_match.group(1).upper()
+        return None
+
+    def set_mac_address(self, mac: str) -> bool:
+        """Set a new MAC address using 'ip link set dev <iface> address <mac>'.
+
+        The interface must be down to change the MAC address.
+        """
+        target_iface = self._monitor_interface if self.monitor_active else self._original_interface
+
+        # Bring interface down
+        if not self._interface_down(target_iface):
+            log.error(f"Failed to bring down {target_iface} for MAC change")
+            return False
+
+        # Set the new MAC address
+        success, _ = self._run_cmd([
+            "ip", "link", "set", "dev", target_iface, "address", mac
+        ])
+        if not success:
+            log.error(f"Failed to set MAC address to {mac} on {target_iface}")
+            self._interface_up(target_iface)
+            return False
+
+        # Bring interface back up
+        self._interface_up(target_iface)
+        log.info(f"MAC address set to {mac} on {target_iface}")
+        return True
+
+
 class ChipMonitorManager:
     """Chip-based monitor mode configuration manager."""
 
@@ -363,18 +581,36 @@ def get_interface_mac(interface: str) -> Optional[str]:
     return manager.get_mac_address()
 
 
-def setup_monitor_mode(interface: str, chip_type: Optional[str] = None) -> Tuple[bool, Optional[WindowsChipMonitorManager]]:
+def setup_monitor_mode(interface: str, chip_type: Optional[str] = None) -> Tuple[bool, Optional[object]]:
     """Set up monitor mode on the specified interface.
+
+    Auto-detects platform and uses the appropriate monitor manager:
+        - Linux: LinuxMonitorManager (iw/ip commands)
+        - Windows: WindowsChipMonitorManager (Npcap-based)
 
     Args:
         interface: The network interface name.
-        chip_type: Optional chip type hint for configuration.
+        chip_type: Optional chip type hint for configuration (Windows only).
 
     Returns:
-        Tuple of (success, WindowsChipMonitorManager instance or None).
+        Tuple of (success, manager instance or None).
     """
     log.info(f"Setting up monitor mode on: {interface}")
 
+    if IS_LINUX:
+        manager = LinuxMonitorManager(interface)
+        if not manager.check_supported():
+            log.info(f"Interface '{interface}' does not support monitor mode")
+            return (False, None)
+        success = manager.enable_monitor_mode()
+        if success:
+            log.info(f"Monitor mode active on Linux: {manager.interface}")
+            return (True, manager)
+        else:
+            log.error("Failed to enable monitor mode on Linux")
+            return (False, None)
+
+    # Default: Windows path
     chip_manager = WindowsChipMonitorManager(interface)
 
     if not chip_manager.monitor_manager.check_supported():

@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Implement a real-world recon-to-attack flow manager that orchestrates the complete lifecycle: environment setup, passive recon, target analysis, attack selection, execution, and post-attack cleanup. This provides a higher-level abstraction over the existing AttackOrchestrator for automated end-to-end operations.",
+  "status": "pending",
+  "steps": [
+    "Create posframework/attack_flow.py with a ReconAttackFlow class that implements the full real-world workflow: (a) Phase 0 - Environment Setup: detect platform, enable monitor mode using the appropriate manager (LinuxMonitorManager or WindowsMonitorManager), validate interface is in monitor mode, set initial channel. (b) Phase 1 - Passive Recon: run ReconEngine for configurable duration, collect AP/client data, identify POS targets, score targets by priority (POS vendor > strong signal > many clients). (c) Phase 2 - Target Analysis: query database for best targets, analyze security posture (open vs WPA2 vs WPA3), identify vulnerable clients, check for isolation, build attack plan. (d) Phase 3 - Attack Selection: based on target analysis, automatically select appropriate attack modules (e.g., if WPA2 -> handshake capture + deauth; if open -> rogue AP + MITM; if POS detected -> full chain). Use plugin system if available, fall back to direct module usage. (e) Phase 4 - Attack Execution: launch selected attacks in correct order with proper timing, monitor progress, adapt if attacks fail (e.g., switch targets, try different approach). (f) Phase 5 - Post-Attack: collect results, export credentials/handshakes, generate report, cleanup (restore monitor mode, close DB).",
+    "Create posframework/target_scorer.py with a TargetScorer class that scores and ranks discovered targets based on: POS vendor match (highest priority), signal strength, number of associated clients, security type (weaker = easier), isolation detected (penalty), and client RSSI proximity. Returns ordered list of targets with scores and recommended attack strategy.",
+    "Create posframework/attack_selector.py with an AttackSelector class that takes a scored target and returns an ordered list of attack modules to use. Logic: (a) Open network -> RogueAP + DNS Spoof + Credential Harvest, (b) WPA2-PSK -> Deauth + Handshake Capture + Evil Twin, (c) WPA2-Enterprise -> KARMA + Credential Harvest, (d) POS target -> Full chain (deauth + rogue + MITM + printer scan if applicable), (e) Supports custom attack chains via config.",
+    "Update posframework/__main__.py to add a new 'auto' mode that uses ReconAttackFlow for fully automated operation. Add CLI args: --auto-duration (total operation time), --auto-max-targets (max targets to attack), --stealth (use slower/quieter techniques).",
+    "Update posframework/__init__.py to export ReconAttackFlow, TargetScorer, AttackSelector."
+  ],
+  "acceptance_criteria": [
+    "posframework/attack_flow.py exists with ReconAttackFlow class implementing all 6 phases",
+    "posframework/target_scorer.py exists with TargetScorer that scores/ranks targets",
+    "posframework/attack_selector.py exists with AttackSelector that maps targets to attack strategies",
+    "ReconAttackFlow integrates with existing engines (ReconEngine, AttackOrchestrator, etc.)",
+    "CLI has 'auto' mode with --auto-duration, --auto-max-targets, --stealth options",
+    "Running 'python -c \"from posframework.attack_flow import ReconAttackFlow\"' succeeds",
+    "Running 'python -c \"from posframework.target_scorer import TargetScorer\"' succeeds",
+    "Running 'python -c \"from posframework.attack_selector import AttackSelector\"' succeeds"
+  ],
+  "verification": [
+    "python -c \"from posframework.attack_flow import ReconAttackFlow; print('ReconAttackFlow imported OK')\"",
+    "python -c \"from posframework.target_scorer import TargetScorer; print('TargetScorer imported OK')\"",
+    "python -c \"from posframework.attack_selector import AttackSelector; print('AttackSelector imported OK')\"",
+    "python -c \"import posframework; print(posframework.__version__)\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
