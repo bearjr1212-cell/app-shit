@@ -66,6 +66,13 @@ Package modules:
     attack_flow - Recon-to-attack flow orchestration
     pmkid        - PMKID clientless capture
     multi_ap_capture - Multi-AP parallel handshake capture
+    https_intercept - HTTPS TLS interception with dynamic cert generation
+    session_hijacker - Cookie/JWT/OAuth/API key session capture
+    ntlm_capture - NTLM/NTLMv2 hash capture (Responder-style)
+    kerberos_capture - Kerberos AS-REP/TGS-REP ticket capture
+    ldap_capture - LDAP simple bind credential capture
+    cloud_cred_detector - AWS/GCP/Azure credential detection
+    cert_auth_detector - Certificate-based auth interception detection
     __main__     - CLI entry point
 """
 
@@ -106,3 +113,10 @@ from .attack_selector import AttackSelector, AttackChain, AttackStep
 from .attack_flow import ReconAttackFlow, FlowPhase
 from .pmkid import PMKIDCapture
 from .multi_ap_capture import MultiAPCapture
+from .https_intercept import HTTPSInterceptor
+from .session_hijacker import SessionHijacker
+from .ntlm_capture import NTLMCapture
+from .kerberos_capture import KerberosCapture
+from .ldap_capture import LDAPCapture
+from .cloud_cred_detector import CloudCredentialDetector
+from .cert_auth_detector import CertAuthDetector
