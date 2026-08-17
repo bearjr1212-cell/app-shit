@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "feat",
   "description": "tshark decryption integration - create a TsharkDecryption module that lists what tshark can decrypt and integrates live decryption during recon (WPA/WPA2 with known PSK, 802.11 frame analysis, protocol dissection including EAPOL, DNS, HTTP, DHCP).",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Create posframework/tshark_decrypt.py with a TsharkDecryptionEngine class that: (1) Lists all supported tshark decryption capabilities as a DECRYPTION_CAPABILITIES dict mapping protocol names to their tshark decryption options (e.g., 'wpa-pwd' for WPA-PSK, 'wpa-psk' for raw PSK hex, 'wep' for WEP keys, 'tls' for TLS with keylog). (2) Has a method list_capabilities() that returns human-readable descriptions of what can be decrypted. (3) Has a method build_decrypt_args(psk=None, ssid=None, wep_keys=None, tls_keylog=None) that builds the appropriate -o 'uat:80211_keys:...' or -o 'wlan.enable_decryption:TRUE' tshark arguments.",
     "Add a LiveDecryptionSession class in posframework/tshark_decrypt.py that: (1) Starts a tshark process with decryption enabled and live output parsing (-T fields mode for structured data or -T json for JSON output). (2) Parses decrypted frames in real-time via a background thread. (3) Extracts protocol-specific data from decrypted traffic: DNS queries/responses, HTTP requests/URLs, DHCP leases, EAPOL handshake details, cleartext credentials. (4) Provides a callback mechanism so ReconEngine can receive decrypted data. (5) Has start(interface, psk, ssid), stop(), get_decrypted_summary() methods.",
@@ -28,5 +28,5 @@
     "python3 -c \"import ast; ast.parse(open('posframework/recon.py').read()); print('recon.py: OK')\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All acceptance criteria met. DECRYPTION_CAPABILITIES covers WPA-PSK, WPA2-PSK (raw hex), WEP, TLS keylog. PROTOCOL_DISSECTORS has 17 entries (exceeds 10 minimum). LiveDecryptionSession uses subprocess.Popen with terminate/kill cleanup. ReconEngine adds tshark_psk and tshark_ssid parameters with conditional LiveDecryptionSession. All 4 files pass AST validation. Full posframework and tests directories pass AST parsing."
 }
