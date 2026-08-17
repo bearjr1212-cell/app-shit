@@ -9,6 +9,6 @@
     "tests": "pass",
     "test_quality": "pass",
     "docker_build": "skipped",
-    "summary": "All 97 Python files pass AST validation. Review fixes applied: PSK temp file, bounded deques, atexit.unregister, signal handler log level upgraded, MonitorMethod docstring clarification."
+    "summary": "All Python files pass AST validation. v2 review fixes applied: removed broken tshark key file mechanism (_create_key_file/_remove_key_file) that used invalid -o uat:80211_keys:\"<filepath>\" syntax. Now uses build_decrypt_args() inline approach directly with log.warning about PSK process listing visibility."
   }
 }
