@@ -1,0 +1,44 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Credential operations and intelligence: credential spray/reuse testing across services, credential enrichment with metadata, auto-pivot after successful crack, browser credential extraction via JS injection, hashcat integration for WPA cracking, credential correlation engine, and client profiling",
+  "status": "pending",
+  "steps": [
+    "Create posframework/cred_sprayer.py - CredentialSprayer class: takes a list of captured credentials and sprays them across multiple services. Supports SSH (paramiko-style via subprocess ssh), RDP (via xfreerdp subprocess), SMB (smbclient subprocess), SMTP (socket-based), IMAP (socket-based), HTTP form (using _http_request pattern from cred_tester.py). Configurable delay/lockout-aware. Methods: add_credential(user, password), add_target_service(host, port, protocol), start()/stop()/get_results()/get_stats(). Threaded with configurable concurrency.",
+    "Create posframework/cred_enrichment.py - CredentialEnrichment class: wraps each credential with metadata fields: source_url, target_service, timestamp, client_mac, client_hostname (from DHCP/mDNS sniffing), confidence_score (0.0-1.0 based on protocol and validation status), capture_method, associated_bssid. Provides enrich(credential_dict) -> enriched_dict. Integrates with database.py to store enriched credentials in a new table.",
+    "Create posframework/auto_pivot.py - AutoPivot class: after a WPA password is cracked/tested successfully, automatically connects to the target AP using wpa_supplicant (like cred_tester.test_wifi_password), obtains DHCP lease, sets up a SSH/SOCKS tunnel for pivoting into the internal network, scans internal subnet for services. Methods: pivot(ssid, password, interface), setup_tunnel(gateway_ip), scan_internal(subnet), stop(). Uses subprocess for wpa_supplicant and ssh tunnel.",
+    "Create posframework/browser_cred_extract.py - BrowserCredentialExtractor class: works with HTTPInjector to serve a JS payload that attempts to extract saved passwords using credential autofill detection (creates hidden login forms, waits for browser autofill, exfiltrates via fetch to attacker server). Includes HTTP server to receive exfiltrated data. Methods: start()/stop()/get_payload_js()/get_extracted()/get_stats().",
+    "Create posframework/hashcat_integration.py - HashcatIntegration class: auto-feeds captured .hccapx/.22000 files to hashcat subprocess, monitors GPU cracking progress by parsing hashcat stdout (speed, progress, recovered), imports cracked passwords back into the database. Supports wordlist and rule-based attacks. Methods: start_crack(handshake_file, wordlist, rules=None), get_progress(), get_cracked(), stop(), auto_import_cracked(db).",
+    "Create posframework/cred_correlation.py - CredentialCorrelationEngine class: links credentials across protocols by matching on username, password hash, source IP, and timing. Groups credentials into identities (e.g., same password on WiFi + HTTP admin + email = one person). Computes a correlation graph. Methods: add_credential(cred_dict), correlate()/get_identities()/get_stats(). Returns identity objects with all linked credentials.",
+    "Create posframework/client_profiler.py - ClientProfiler class: builds per-client profiles containing: OS fingerprint (from HTTP User-Agent, TCP window size, TTL), probed networks (from probe requests), credentials captured (linked from DB), handshakes captured, associated APs, first/last seen, device type classification. Methods: update_from_packet(pkt), get_profile(mac), get_all_profiles(), export_profiles(). Integrates with database for persistence.",
+    "Update posframework/database.py to add new tables: enriched_credentials (with all enrichment fields), client_profiles (mac, os_fingerprint, device_type, probed_networks JSON, first_seen, last_seen), credential_correlations (identity_id, credential_id, correlation_score).",
+    "Update posframework/__init__.py to export all new classes: CredentialSprayer, CredentialEnrichment, AutoPivot, BrowserCredentialExtractor, HashcatIntegration, CredentialCorrelationEngine, ClientProfiler.",
+    "Update posframework/orchestrator.py to optionally initialize and integrate the new modules (auto_pivot after successful cred test, client_profiler in background recon, cred_enrichment on harvest, hashcat_integration after handshake export)."
+  ],
+  "acceptance_criteria": [
+    "posframework/cred_sprayer.py exists with CredentialSprayer supporting SSH/RDP/SMB/SMTP/IMAP/HTTP spray",
+    "posframework/cred_enrichment.py adds source_url, target_service, timestamp, client_mac, client_hostname, confidence_score to credentials",
+    "posframework/auto_pivot.py connects to AP, sets up tunnel, scans internal network",
+    "posframework/browser_cred_extract.py serves JS payload and receives exfiltrated credentials",
+    "posframework/hashcat_integration.py manages hashcat subprocess and imports cracked passwords",
+    "posframework/cred_correlation.py links credentials across protocols into identities",
+    "posframework/client_profiler.py builds per-client profiles with OS fingerprint, probed networks, credentials",
+    "database.py has new tables for enriched credentials, client profiles, and correlations",
+    "orchestrator.py integrates new modules in the attack pipeline",
+    "All new and modified files parse as valid Python (ast.parse succeeds)"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('posframework/cred_sprayer.py').read()); print('cred_sprayer.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/cred_enrichment.py').read()); print('cred_enrichment.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/auto_pivot.py').read()); print('auto_pivot.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/browser_cred_extract.py').read()); print('browser_cred_extract.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/hashcat_integration.py').read()); print('hashcat_integration.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/cred_correlation.py').read()); print('cred_correlation.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/client_profiler.py').read()); print('client_profiler.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/database.py').read()); print('database.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/orchestrator.py').read()); print('orchestrator.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/__init__.py').read()); print('__init__.py OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

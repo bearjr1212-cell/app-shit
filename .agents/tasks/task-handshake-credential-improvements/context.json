@@ -1,0 +1,26 @@
+{
+  "project_type": "Python 802.11 reconnaissance and attack framework (POSFramework v2.1.0)",
+  "language": "Python 3.8+",
+  "build_system": "setuptools via setup.py, pip install -e .",
+  "test_framework": "No test framework found - validation via Python AST/syntax checking",
+  "build_command": "python3 -c \"import ast, sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]\"",
+  "test_command": "python3 -c \"import ast; import glob; files=glob.glob('posframework/**/*.py', recursive=True); [ast.parse(open(f).read()) for f in files]; print(f'All {len(files)} files parse OK')\"",
+  "verification_instructions": "Since scapy cannot be installed (INTEGRATIONS_ONLY network), verify all .py files parse as valid Python via ast.parse(). Check imports are internally consistent.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "pip install -e . (requires scapy, pyyaml, manuf - unavailable in sandbox)",
+  "environment_constraints": "INTEGRATIONS_ONLY network - cannot pip install any packages. No scapy available for runtime testing. Validate via AST parsing and static analysis only.",
+  "contribution_requirements": "Follow existing code patterns: classes with start()/stop() lifecycle, _log via config.log, docstrings with box-drawing headers, type hints not used, store state in instance vars.",
+  "key_patterns": "Modules follow pattern: class with __init__(interface, ...), start()/stop() methods, get_stats() for metrics, threading for background work. Database uses SQLite with WAL mode. Scapy for packet crafting/sniffing. Config constants in config.py. All modules exported from __init__.py.",
+  "relevant_files": [
+    "posframework/handshake.py",
+    "posframework/cred_harvester.py",
+    "posframework/cred_tester.py",
+    "posframework/mitm.py",
+    "posframework/ssl_strip.py",
+    "posframework/database.py",
+    "posframework/orchestrator.py",
+    "posframework/config.py",
+    "posframework/__init__.py"
+  ],
+  "directory_structure": "posframework/ contains 36+ Python modules. Key: config.py (constants), database.py (SQLite), orchestrator.py (attack pipeline), handshake.py (EAPOL capture), cred_harvester.py (credential sniffing), cred_tester.py (credential testing), mitm.py (ARP MITM), ssl_strip.py (HTTPS downgrade). Plugins in posframework/plugins/."
+}

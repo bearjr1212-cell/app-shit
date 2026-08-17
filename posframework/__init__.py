@@ -59,6 +59,13 @@ Package modules:
     printer_creds - Printer credential harvesting
     monitor_mode - Windows monitor mode management
     monitor_windows - Windows monitor mode utility
+    plugin_loader - Dynamic plugin system
+    config_loader - YAML configuration loader
+    target_scorer - Target scoring and ranking
+    attack_selector - Attack chain selection logic
+    attack_flow - Recon-to-attack flow orchestration
+    pmkid        - PMKID clientless capture
+    multi_ap_capture - Multi-AP parallel handshake capture
     __main__     - CLI entry point
 """
 
@@ -94,3 +101,8 @@ from .print_interceptor import PrintJobInterceptor
 from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
 from .plugin_loader import PluginLoader, AttackPlugin
 from .config_loader import ConfigLoader
+from .target_scorer import TargetScorer, ScoredTarget
+from .attack_selector import AttackSelector, AttackChain, AttackStep
+from .attack_flow import ReconAttackFlow, FlowPhase
+from .pmkid import PMKIDCapture
+from .multi_ap_capture import MultiAPCapture

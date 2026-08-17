@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Enhanced handshake capture: PMKID clientless capture, deduplication, hashcat .hccapx/.22000 export, multi-AP parallel capture, FT (802.11r) handshake detection, and beacon frame inclusion in PCAP",
+  "status": "in_progress",
+  "steps": [
+    "Create posframework/pmkid.py - PMKIDCapture class that sniffs for EAPOL Message 1 frames, extracts PMKID from RSN IE (first 16 bytes of PMKID field in Key Data), exports in hashcat mode 22000 format (WPA*01*PMKID*MAC_AP*MAC_STA*ESSID_HEX). Include start()/stop()/get_stats() lifecycle following HandshakeSniffer pattern.",
+    "Add handshake deduplication to posframework/handshake.py - In HandshakeCapture, add a _exported_pairs set that tracks (client_mac, bssid) pairs already exported. In add_frame(), skip if pair already in _exported_pairs. In export_pcap(), add the pair to _exported_pairs. Add clear_dedup() method to reset.",
+    "Add hashcat export methods to posframework/handshake.py - Add export_hccapx(client_mac, bssid) that writes binary .hccapx format (mode 2500) with fields: signature HCCAPX\\x04, essid, bssid, client_mac, anonce, snonce, eapol frames, keyver, keymic. Add export_22000(client_mac, bssid) that writes WPA*02*MIC*MAC_AP*MAC_STA*ESSID_HEX*ANONCE*EAPOL format for hashcat mode 22000.",
+    "Create posframework/multi_ap_capture.py - MultiAPCapture class with a priority queue (heapq) of (priority, bssid) targets. Manages multiple HandshakeSniffer instances concurrently. Methods: add_target(bssid, priority), remove_target(bssid), start()/stop(). Tracks progress per-AP. Callbacks fire when any AP's handshake completes.",
+    "Add FT (Fast Transition / 802.11r) handshake detection to posframework/handshake.py - In HandshakeSniffer._process_frame(), detect reassociation frames (subtype 2) with FT authentication (auth_algo=2). Extract FT-specific EAPOL fields (FTIE, MDIE, RSNIE) from the reassociation frame. Store as a valid 'ft_handshake' type alongside standard 4-way.",
+    "Add beacon frame capture to posframework/handshake.py - In HandshakeSniffer, add _beacon_cache dict mapping bssid -> beacon_frame. In _process_frame_unfiltered(), also capture Dot11Beacon frames and store them. In HandshakeCapture.export_pcap(), prepend the cached beacon frame (if available) to the PCAP output so cracking tools can extract ESSID.",
+    "Update posframework/__init__.py to export PMKIDCapture from pmkid.py and MultiAPCapture from multi_ap_capture.py."
+  ],
+  "acceptance_criteria": [
+    "posframework/pmkid.py exists with PMKIDCapture class that has start(), stop(), get_stats(), export_pmkid_hashcat() methods",
+    "HandshakeCapture deduplicates - calling export_pcap twice for same pair returns None on second call",
+    "export_hccapx() and export_22000() methods exist on HandshakeCapture and produce correctly formatted output",
+    "posframework/multi_ap_capture.py exists with MultiAPCapture class managing multiple sniffers",
+    "HandshakeSniffer detects 802.11r FT reassociation frames in _process_frame()",
+    "Beacon frames are cached and prepended to PCAP exports",
+    "All new files parse as valid Python (ast.parse succeeds)"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('posframework/pmkid.py').read()); print('pmkid.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/multi_ap_capture.py').read()); print('multi_ap_capture.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/handshake.py').read()); print('handshake.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/__init__.py').read()); print('__init__.py OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

@@ -1,0 +1,7 @@
+{
+  "task_id": "task-handshake-credential-improvements",
+  "task_description": "Implement 20 handshake and credential improvements: PMKID capture, handshake dedup, hashcat export, multi-AP parallel capture, FT handshake, beacon in PCAP, HTTPS interception, cookie/session capture, credential spray, NTLM hash capture, Kerberos capture, LDAP capture, credential enrichment, auto-pivot, browser credential extraction, hashcat integration, cloud credential detection, cert-based auth detection, credential correlation engine, client profiling",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}
