@@ -58,12 +58,34 @@ Package modules:
     print_interceptor - Print job interception
     printer_creds - Printer credential harvesting
     monitor_mode - Windows monitor mode management
-    interface_manager - Auto-discovery & interface assignment
     monitor_windows - Windows monitor mode utility
+    plugin_loader - Dynamic plugin system
+    config_loader - YAML configuration loader
+    target_scorer - Target scoring and ranking
+    attack_selector - Attack chain selection logic
+    attack_flow - Recon-to-attack flow orchestration
+    pmkid        - PMKID clientless capture
+    multi_ap_capture - Multi-AP parallel handshake capture
+    https_intercept - HTTPS TLS interception with dynamic cert generation
+    session_hijacker - Cookie/JWT/OAuth/API key session capture
+    ntlm_capture - NTLM/NTLMv2 hash capture (Responder-style)
+    kerberos_capture - Kerberos AS-REP/TGS-REP ticket capture
+    ldap_capture - LDAP simple bind credential capture
+    cloud_cred_detector - AWS/GCP/Azure credential detection
+    cert_auth_detector - Certificate-based auth interception detection
+    cred_sprayer     - Credential spray/reuse testing across services
+    cred_enrichment  - Credential metadata enrichment
+    auto_pivot       - Auto-pivot with cracked credentials
+    browser_cred_extract - Browser autofill credential extraction
+    hashcat_integration - Hashcat WPA cracking integration
+    cred_correlation - Cross-protocol credential correlation engine
+    client_profiler  - Per-client device profiling
+    vlan_scanner     - VLAN discovery via 802.1Q/CDP/LLDP/DTP
+    network_mapper   - Network segmentation mapping
     __main__     - CLI entry point
 """
 
-__version__ = "2.2.0"
+__version__ = "2.1.0"
 
 from .config import DB_NAME, CHANNELS_24GHZ, CHANNELS_5GHZ, log
 from .database import POSDatabase
@@ -95,5 +117,24 @@ from .print_interceptor import PrintJobInterceptor
 from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
 from .plugin_loader import PluginLoader, AttackPlugin
 from .config_loader import ConfigLoader
-from .interface_manager import InterfaceManager, auto_detect_interfaces, setup_dual_interfaces
-from .shared import identify_eapol_message, enable_ip_forwarding, ARPSpoofer, build_beacon_frame
+from .target_scorer import TargetScorer, ScoredTarget
+from .attack_selector import AttackSelector, AttackChain, AttackStep
+from .attack_flow import ReconAttackFlow, FlowPhase
+from .pmkid import PMKIDCapture
+from .multi_ap_capture import MultiAPCapture
+from .https_intercept import HTTPSInterceptor
+from .session_hijacker import SessionHijacker
+from .ntlm_capture import NTLMCapture
+from .kerberos_capture import KerberosCapture
+from .ldap_capture import LDAPCapture
+from .cloud_cred_detector import CloudCredentialDetector
+from .cert_auth_detector import CertAuthDetector
+from .cred_sprayer import CredentialSprayer
+from .cred_enrichment import CredentialEnrichment
+from .auto_pivot import AutoPivot
+from .browser_cred_extract import BrowserCredentialExtractor
+from .hashcat_integration import HashcatIntegration
+from .cred_correlation import CredentialCorrelationEngine
+from .client_profiler import ClientProfiler
+from .vlan_scanner import VLANScanner
+from .network_mapper import NetworkSegmentationMapper

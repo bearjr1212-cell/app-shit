@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "VLAN scanning and advanced network segmentation mapping: discover VLANs on the network via 802.1Q tag analysis, CDP/LLDP parsing, and VLAN hopping techniques. Map network segmentation by identifying VLAN boundaries, inter-VLAN routing, and access control gaps.",
+  "status": "completed",
+  "steps": [
+    "Create posframework/vlan_scanner.py - VLANScanner class: sniffs for 802.1Q tagged frames (Dot1Q layer in scapy) to discover active VLANs. Performs VLAN hopping via DTP (Dynamic Trunking Protocol) spoofing to force trunk mode on switch ports. Sends tagged frames on discovered VLANs to test reachability. Parses CDP (Cisco Discovery Protocol) and LLDP (Link Layer Discovery Protocol) frames to discover switch/VLAN topology. Methods: start()/stop()/discover_vlans()/get_vlans()/get_stats(). Includes DTP spoof method to negotiate trunk, and double-tagging attack (Q-in-Q) for VLAN hopping across native VLAN.",
+    "Create posframework/network_mapper.py - NetworkSegmentationMapper class: builds a map of the network segmentation by combining VLAN discovery data, ARP scan results per VLAN, routing table analysis (traceroute-style probes), and firewall rule inference (testing port reachability across VLANs). Produces a segmentation map showing: VLANs discovered, IP ranges per VLAN, inter-VLAN routes, ACL gaps (ports accessible across VLANs that shouldn't be), gateway IPs per segment, and identified high-value segments (management VLANs, payment VLANs). Methods: start()/stop()/scan_segment(vlan_id)/map_all()/get_map()/export_map()/get_stats(). Integrates with database for persistence.",
+    "Update posframework/database.py to add tables: vlans (vlan_id, name, ip_range, gateway, discovery_method, first_seen), network_segments (segment_id, vlan_id, ip_range, hosts_discovered, services JSON, acl_gaps JSON), vlan_topology (src_vlan, dst_vlan, route_type, gateway_ip).",
+    "Update posframework/__init__.py to export VLANScanner and NetworkSegmentationMapper.",
+    "Update posframework/orchestrator.py to optionally integrate VLAN scanning as a post-pivot reconnaissance phase (after auto_pivot connects to internal network)."
+  ],
+  "acceptance_criteria": [
+    "posframework/vlan_scanner.py exists with VLANScanner class that discovers VLANs via 802.1Q sniffing, CDP/LLDP parsing, and DTP spoofing",
+    "posframework/network_mapper.py exists with NetworkSegmentationMapper that builds segmentation maps with VLANs, IP ranges, inter-VLAN routes, and ACL gaps",
+    "database.py has new tables for vlans, network_segments, vlan_topology",
+    "All new and modified files parse as valid Python (ast.parse succeeds)"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('posframework/vlan_scanner.py').read()); print('vlan_scanner.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/network_mapper.py').read()); print('network_mapper.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/database.py').read()); print('database.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/__init__.py').read()); print('__init__.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/orchestrator.py').read()); print('orchestrator.py OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": "All 66 Python files in posframework/ pass ast.parse validation. VLAN tables added to database.py with proper ON CONFLICT handling. Orchestrator integrates VLAN scanning as a background thread in the post-pivot phase."
+}

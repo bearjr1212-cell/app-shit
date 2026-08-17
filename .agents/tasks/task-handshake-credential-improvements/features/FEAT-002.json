@@ -1,0 +1,38 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Advanced credential capture modules: HTTPS TLS interception with dynamic cert generation, cookie/session/JWT token capture, NTLM/NTLMv2 hash capture (Responder-style), Kerberos ticket capture (AS-REQ/TGS-REP), LDAP simple bind capture, cloud credential detection (AWS/GCP/Azure), and certificate-based auth interception logging",
+  "status": "completed",
+  "steps": [
+    "Create posframework/https_intercept.py - HTTPSInterceptor class: generates a CA cert on init (using ssl/cryptography-style approach with subprocess openssl calls), for each intercepted TLS connection generates a dynamic cert signed by the CA. Implements a transparent proxy that terminates TLS, inspects plaintext HTTP, then re-encrypts to upstream. Methods: start()/stop()/get_stats()/get_intercepted(). Extracts credentials from decrypted HTTPS traffic using patterns from cred_harvester.py.",
+    "Create posframework/session_hijacker.py - SessionHijacker class: sniffs HTTP/HTTPS traffic (works with HTTPSInterceptor output), extracts Set-Cookie headers, Authorization: Bearer tokens, JWT tokens (regex for eyJ pattern), OAuth tokens, API keys (X-API-Key, Authorization headers). Stores captured sessions with metadata (source IP, domain, timestamp, token type). Methods: start()/stop()/get_sessions()/get_stats().",
+    "Create posframework/ntlm_capture.py - NTLMCapture class (Responder-style): sniffs SMB (port 445), HTTP NTLM auth (WWW-Authenticate: NTLM), captures NTLM Type 1/2/3 messages, extracts NTLMv1/v2 challenge-response hashes in john/hashcat format (username::domain:challenge:response:blob). Includes SMB server component that sends NTLM challenge to force authentication. Methods: start()/stop()/get_hashes()/export_hashcat().",
+    "Create posframework/kerberos_capture.py - KerberosCapture class: sniffs port 88 traffic, parses AS-REQ (extract client principal, encrypted timestamp for AS-REP roasting), TGS-REP (extract service ticket for Kerberoasting). Exports in hashcat format: $krb5asrep$ for AS-REP roast, $krb5tgs$ for Kerberoast. Methods: start()/stop()/get_tickets()/export_hashcat().",
+    "Create posframework/ldap_capture.py - LDAPCapture class: sniffs port 389 traffic, parses LDAP simple bind requests (BER/ASN.1 tag 0x60 for BindRequest, extract DN and password). Logs plaintext domain credentials. Methods: start()/stop()/get_credentials()/get_stats().",
+    "Create posframework/cloud_cred_detector.py - CloudCredentialDetector class: inspects intercepted HTTP traffic for AWS access keys (AKIA pattern), AWS secret keys, GCP service account JSON, Azure AD tokens (Bearer eyJ with aud/iss claims), Azure storage keys. Regex-based detection with confidence scoring. Methods: start()/stop()/scan_payload(payload)/get_detections()/get_stats().",
+    "Create posframework/cert_auth_detector.py - CertAuthDetector class: monitors TLS handshakes for CertificateRequest messages from servers and Certificate messages from clients. Logs client certificate usage including subject DN, issuer, serial number. Flags high-value targets using cert-based auth. Methods: start()/stop()/get_detections()/get_stats().",
+    "Update posframework/__init__.py to export all new classes: HTTPSInterceptor, SessionHijacker, NTLMCapture, KerberosCapture, LDAPCapture, CloudCredentialDetector, CertAuthDetector."
+  ],
+  "acceptance_criteria": [
+    "posframework/https_intercept.py exists with HTTPSInterceptor class with CA generation and transparent proxy logic",
+    "posframework/session_hijacker.py captures cookies, JWTs, OAuth tokens, API keys from traffic",
+    "posframework/ntlm_capture.py captures NTLM challenge-response and exports in hashcat format",
+    "posframework/kerberos_capture.py parses AS-REQ/TGS-REP and exports $krb5asrep$/$krb5tgs$ formats",
+    "posframework/ldap_capture.py sniffs port 389 and extracts simple bind credentials",
+    "posframework/cloud_cred_detector.py detects AWS/GCP/Azure credentials with regex patterns",
+    "posframework/cert_auth_detector.py detects client certificate auth usage in TLS",
+    "All new files parse as valid Python (ast.parse succeeds)"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('posframework/https_intercept.py').read()); print('https_intercept.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/session_hijacker.py').read()); print('session_hijacker.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/ntlm_capture.py').read()); print('ntlm_capture.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/kerberos_capture.py').read()); print('kerberos_capture.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/ldap_capture.py').read()); print('ldap_capture.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/cloud_cred_detector.py').read()); print('cloud_cred_detector.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/cert_auth_detector.py').read()); print('cert_auth_detector.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/__init__.py').read()); print('__init__.py OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": "All 7 modules created and pass ast.parse. Modules follow existing patterns from cred_harvester.py and ssl_strip.py with __init__(interface, ...), start()/stop()/get_stats() lifecycle, threading for background sniffing, and scapy sniff() for packet capture. All classes exported from __init__.py."
+}

