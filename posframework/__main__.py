@@ -211,7 +211,7 @@ def build_parser():
     terminal.add_argument("-d", "--db", default=DB_NAME, help="Database file path")
 
     # ── GUI mode ──────────────────────────────────────────────────────────────
-    sub.add_parser("gui", help="Launch Tkinter graphical interface")
+    sub.add_parser("gui", help="Launch curses-based CLI terminal UI")
 
     # ── Auto mode ─────────────────────────────────────────────────────────────
     auto = sub.add_parser("auto",
@@ -398,12 +398,7 @@ def main():
         ui.run()
 
     elif args.mode == "gui":
-        # Tkinter graphical interface
-        # Run pre-flight checks to prevent segfaults on headless systems
-        # or when Tcl/Tk conflicts with scapy's libcrypto
-        from .tk_preflight import preflight_check
-        if not preflight_check(verbose=True):
-            sys.exit(1)
+        # CLI Terminal UI (curses-based)
         from .gui import main as gui_main
         gui_main()
 

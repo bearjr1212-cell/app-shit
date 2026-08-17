@@ -58,7 +58,7 @@ posframework export --format json --output results.json
 # Interactive terminal mode
 posframework terminal
 
-# GUI mode (Tkinter)
+# CLI Terminal UI (curses-based)
 posframework gui
 ```
 
@@ -72,7 +72,7 @@ posframework gui
 | `analyze`  | Post-attack analysis of captured data               |
 | `export`   | Export scan/attack results in various formats       |
 | `terminal` | Interactive terminal for manual operations          |
-| `gui`      | Tkinter-based graphical user interface              |
+| `gui`      | Curses-based CLI terminal UI                        |
 
 ## Platform Support
 

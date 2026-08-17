@@ -1,7 +1,7 @@
 """
-POSFramework GUI Launcher
-──────────────────────────
-Simple entry point to launch the Tkinter GUI application.
+POSFramework CLI Terminal UI Launcher
+--------------------------------------
+Simple entry point to launch the curses-based terminal UI application.
 
 Usage:
   python -m posframework.gui_main
