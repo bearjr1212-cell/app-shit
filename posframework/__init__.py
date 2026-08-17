@@ -86,6 +86,13 @@ Package modules:
     vlan_scanner     - VLAN discovery via 802.1Q/CDP/LLDP/DTP
     network_mapper   - Network segmentation mapping
     __main__     - CLI entry point
+
+Subpackages (new capabilities):
+    ble/         - BLE scanning, beacon spoofing, GATT exploitation, HID injection
+    sdr/         - SDR device management, spectrum analysis, signal decoding
+    gps/         - Async gpsd client, haversine distance, position tracking
+    wpa3/        - WPA3 detection (RSN IE parsing), downgrade attacks, SAE flood
+    john_integration - John the Ripper CLI wrapper for password cracking
 """
 
 __version__ = "2.1.0"
@@ -149,3 +156,10 @@ from .cred_correlation import CredentialCorrelationEngine
 from .client_profiler import ClientProfiler
 from .vlan_scanner import VLANScanner
 from .network_mapper import NetworkSegmentationMapper
+from .john_integration import JohnManager, JohnMode, JohnStatus
+
+# Subpackage re-exports for convenience
+from . import ble
+from . import sdr
+from . import gps
+from . import wpa3

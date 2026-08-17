@@ -144,3 +144,70 @@ Complete list of all attack, reconnaissance, and exploitation capabilities.
 - **AGGRESSIVE**: All attacks enabled, 3 concurrent targets, 15s scan interval, auto-retry
 - **BALANCED**: Selective attacks, 1 target at a time, 30s scan interval, longer cooldowns
 - **PASSIVE**: Scan and analyze only, no active attacks, reconnaissance mode
+
+---
+
+## BLE (Bluetooth Low Energy) Module
+
+| Capability | Description | Status |
+|---|---|---|
+| BLE Scanner | Async device discovery via bleak, RSSI tracking, continuous scan | Enabled |
+| iBeacon Parsing | Apple company ID 0x004C, struct-based UUID/major/minor/TX extraction | Enabled |
+| Eddystone Parsing | Service UUID 0xFEAA, UID/URL/TLM frame decoding | Enabled |
+| Beacon Spoofer | hcitool LE advertising: fake iBeacon and Eddystone-URL broadcast | Enabled |
+| GATT Explorer | Full service/characteristic enumeration, read/write, notifications | Enabled |
+| HID Injection | Bluetooth keyboard emulation, keystroke injection, payload delivery | Enabled |
+| Distance Estimation | Log-distance path-loss model from RSSI + TX power | Enabled |
+
+## SDR (Software-Defined Radio) Module
+
+| Capability | Description | Status |
+|---|---|---|
+| Device Discovery | RTL-SDR, RTL-SDR V4 (R828D), HackRF detection | Enabled |
+| RTL-SDR V4 HF | Direct sampling for HF reception (500 kHz - 28 MHz) | Enabled |
+| Bias Tee Control | V4 bias tee for powered antennas/LNAs | Enabled |
+| Spectrum Analyzer | FFT-based PSD with numpy, peak detection, frequency sweep | Enabled |
+| OOK Decoder | Amplitude envelope extraction, adaptive threshold, 433 MHz devices | Enabled |
+| FSK Decoder | Phase-difference demodulation, IoT sensor decoding, 868 MHz | Enabled |
+| Signal Identification | Known device signature matching (weather, garage, car remotes) | Enabled |
+| IQ Sample Capture | Raw complex sample capture via pyrtlsdr | Enabled |
+
+## GPS Module
+
+| Capability | Description | Status |
+|---|---|---|
+| gpsd Client | Async TCP connection to gpsd (port 2947), JSON streaming protocol | Enabled |
+| Auto-Reconnect | Automatic reconnection with configurable delay and max attempts | Enabled |
+| TPV Parsing | Time-Position-Velocity message extraction (lat, lon, alt, speed) | Enabled |
+| SKY Parsing | Satellite visibility and fix quality tracking | Enabled |
+| Haversine Distance | WGS84 great-circle distance calculation between coordinates | Enabled |
+| Bearing Calculation | Initial bearing from point A to point B (0-360 degrees) | Enabled |
+| Distance Tracker | Cumulative distance with jitter/glitch filtering | Enabled |
+| Wardriving | GPS + WiFi scan correlation for network mapping | Enabled |
+
+## WPA3 Detection and Attack Module
+
+| Capability | Description | Status |
+|---|---|---|
+| RSN IE Parsing | Parse AKM suite type 8 (SAE) from iw scan output | Enabled |
+| PMF Detection | RSN capabilities bit 6 (MFPC) and bit 7 (MFPR) | Enabled |
+| Transition Mode Detection | Identify WPA2+WPA3 mixed mode (downgrade possible) | Enabled |
+| OWE Detection | AKM type 18, WFA vendor IE for OWE transition | Enabled |
+| Downgrade Attack | Deauth reason 13 to block SAE, force WPA2 fallback | Enabled |
+| SAE Flood DoS | Dragonblood-style commit frame flooding via mdk4 | Enabled |
+| Attack Auto-Selection | Automatic best-vector selection based on target capabilities | Enabled |
+| Capture Conversion | hcxpcapngtool conversion to hashcat 22000 format | Enabled |
+
+## John the Ripper Integration
+
+| Capability | Description | Status |
+|---|---|---|
+| Wordlist Attack | --wordlist mode with any dictionary file | Enabled |
+| Incremental Mode | Brute-force with charset-based incremental | Enabled |
+| Mask Attack | --mask=?a?a?a?a pattern-based generation | Enabled |
+| Rules Mode | --rules=best64/Jumbo/KoreLogic mutations | Enabled |
+| WPAPSK Format | WiFi handshake cracking (john wpapsk format) | Enabled |
+| Progress Monitoring | Real-time speed/progress via --status parsing | Enabled |
+| Potfile Management | Cracked password storage and retrieval via --show | Enabled |
+| Capture Conversion | hccap2john/wpapcap2john format conversion | Enabled |
+| Runtime Cap | Configurable max runtime with watchdog enforcement | Enabled |

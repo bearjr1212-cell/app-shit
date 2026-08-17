@@ -379,13 +379,19 @@ STANDARD_FEATURES: dict[str, HardwareRequirement] = {
     "wifi_capture": HardwareRequirement.WIFI_MONITOR,
     "evil_twin": HardwareRequirement.WIFI_ATTACK,
     "karma_attack": HardwareRequirement.WIFI_ATTACK,
+    "wpa3_detect": HardwareRequirement.WIFI_MONITOR,
+    "wpa3_attack": HardwareRequirement.WIFI_ATTACK,
 
     # SDR features
     "sdr_spectrum": HardwareRequirement.SDR,
     "sdr_transmit": HardwareRequirement.SDR_TX,
+    "sdr_decode": HardwareRequirement.SDR,
 
     # Bluetooth features
     "ble_scan": HardwareRequirement.BLE,
+    "ble_gatt": HardwareRequirement.BLE,
+    "ble_hid_inject": HardwareRequirement.BLUETOOTH,
+    "ble_beacon_spoof": HardwareRequirement.BLUETOOTH,
 
     # GPS features
     "gps_tracking": HardwareRequirement.GPS,

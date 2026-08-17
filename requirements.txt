@@ -4,3 +4,15 @@ pyyaml
 # Optional: pyWhat for automated attack surface identification
 # Install with: pip install pywhat
 # pywhat
+
+# Optional: BLE scanning and GATT interaction (requires Bluetooth hardware)
+# bleak
+
+# Optional: RTL-SDR device control (requires RTL-SDR hardware)
+# pyrtlsdr
+
+# Optional: numpy for FFT-based spectrum analysis and signal processing
+# numpy
+
+# Optional: hashcat-utils for format conversion
+# (system package, not pip)
