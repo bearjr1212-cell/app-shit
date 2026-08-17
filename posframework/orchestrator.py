@@ -60,6 +60,11 @@ class AttackOrchestrator:
         5. Start DeauthEngine targeting scanned clients
         6. Start KnownBeacons with probed SSIDs from scanned clients
         7. Background recon continues feeding new clients into deauth
+
+    Plugin Support:
+        The orchestrator can load plugins dynamically via PluginLoader.
+        Plugins supplement but do not replace the built-in attack modules.
+        Use load_plugins() to discover and register available plugins.
     """
 
     def __init__(self, monitor_iface, ap_iface, db=None, channels=None,
@@ -70,7 +75,8 @@ class AttackOrchestrator:
                  enable_ap_clone=False, enable_krack=False,
                  enable_dos=False, dos_mode=None,
                  enable_client_isolation=False,
-                 enable_printer_attacks=False):
+                 enable_printer_attacks=False,
+                 plugins=None, plugins_dir=None):
         self.monitor_iface = monitor_iface
         self.ap_iface = ap_iface
         self.channels = channels or CHANNELS_24GHZ
@@ -121,7 +127,53 @@ class AttackOrchestrator:
         self.print_interceptor = None
         self.printer_cred_harvester = None
 
+        # Plugin system
+        self._plugin_loader = None
+        self._active_plugins = []
+        self._plugins_dir = plugins_dir
+        self._requested_plugins = plugins  # list of plugin names to enable
+
         self.running = False
+
+    def load_plugins(self, plugin_dirs=None):
+        """
+        Discover and load available attack plugins.
+
+        This method initializes the PluginLoader, scans the default
+        plugins directory (and any additional dirs), and optionally
+        enables only the plugins specified in self._requested_plugins.
+
+        Args:
+            plugin_dirs: Optional list of additional directories to scan.
+
+        Returns:
+            Number of plugins loaded.
+        """
+        from .plugin_loader import PluginLoader
+
+        dirs = []
+        if self._plugins_dir:
+            dirs.append(self._plugins_dir)
+        if plugin_dirs:
+            dirs.extend(plugin_dirs)
+
+        self._plugin_loader = PluginLoader(plugin_dirs=dirs if dirs else None)
+        count = self._plugin_loader.discover()
+
+        # If specific plugins were requested, disable all others
+        if self._requested_plugins:
+            for plugin in self._plugin_loader.list_plugins():
+                if plugin.name() not in self._requested_plugins:
+                    self._plugin_loader.disable_plugin(plugin.name())
+
+        self._active_plugins = self._plugin_loader.get_enabled_plugins()
+        log.info(f"Plugin system: {count} discovered, "
+                 f"{len(self._active_plugins)} active")
+        return count
+
+    def get_plugin_loader(self):
+        """Return the PluginLoader instance (or None if not initialized)."""
+        return self._plugin_loader
 
     def _auto_select_target(self):
         """Select target from recon data. POS APs get priority."""

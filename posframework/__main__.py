@@ -133,6 +133,13 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="POS Recon & Attack Framework v2 (Stage 2 Enhanced)",
         epilog="Scanned values auto-feed attack modules. No manual targeting required.")
+
+    # Global config arguments (before subcommand)
+    parser.add_argument("--config", dest="config_file", default=None,
+                        help="Path to YAML config file (default: posframework.yaml)")
+    parser.add_argument("--profile", default=None,
+                        help="Activate a named config profile (e.g., stealth, aggressive, recon-only)")
+
     sub = parser.add_subparsers(dest="mode", required=True)
 
     # ── Recon mode ────────────────────────────────────────────────────────────
@@ -205,6 +212,21 @@ def build_parser():
     # ── GUI mode ──────────────────────────────────────────────────────────────
     sub.add_parser("gui", help="Launch Tkinter graphical interface")
 
+    # ── Plugins mode ──────────────────────────────────────────────────────────
+    plugins_parser = sub.add_parser("plugins",
+        help="Plugin management (list, info)")
+    plugins_parser.add_argument("--plugins-dir", default=None,
+                                help="Additional plugins directory to scan")
+    plugins_parser.add_argument("--list-plugins", action="store_true", default=True,
+                                help="List all available plugins (default action)")
+
+    # Add --plugins-dir and --list-plugins to attack and full modes
+    for p in (attack, full):
+        p.add_argument("--plugins-dir", default=None,
+                       help="Additional plugins directory to scan")
+        p.add_argument("--plugins", nargs="*", default=None,
+                       help="Plugin names to enable (space-separated)")
+
     return parser
 
 
@@ -212,6 +234,19 @@ def main():
     verify_privileges()
     parser = build_parser()
     args = parser.parse_args()
+
+    # Load config file early (before any other setup)
+    config = None
+    if getattr(args, 'config_file', None) or getattr(args, 'profile', None):
+        from .config import load_config
+        config = load_config(
+            path=getattr(args, 'config_file', None),
+            profile=getattr(args, 'profile', None),
+        )
+    else:
+        # Still try to load default config file if it exists
+        from .config import load_config
+        config = load_config()
 
     if getattr(args, 'list_ifaces', False):
         list_interfaces()
@@ -273,7 +308,12 @@ def main():
             dos_mode=getattr(args, 'dos_mode', None),
             enable_client_isolation=getattr(args, 'enable_client_isolation', False),
             enable_printer_attacks=getattr(args, 'enable_printer_attacks', False),
+            plugins=getattr(args, 'plugins', None),
+            plugins_dir=getattr(args, 'plugins_dir', None),
         )
+        # Load plugins if plugin system is requested
+        if getattr(args, 'plugins_dir', None) or getattr(args, 'plugins', None):
+            orchestrator.load_plugins()
         if orchestrator.start():
             while orchestrator.running:
                 time.sleep(1)
@@ -297,7 +337,12 @@ def main():
             dos_mode=getattr(args, 'dos_mode', None),
             enable_client_isolation=getattr(args, 'enable_client_isolation', False),
             enable_printer_attacks=getattr(args, 'enable_printer_attacks', False),
+            plugins=getattr(args, 'plugins', None),
+            plugins_dir=getattr(args, 'plugins_dir', None),
         )
+        # Load plugins if plugin system is requested
+        if getattr(args, 'plugins_dir', None) or getattr(args, 'plugins', None):
+            orchestrator.load_plugins()
         if orchestrator.start():
             while orchestrator.running:
                 time.sleep(1)
@@ -342,6 +387,20 @@ def main():
             sys.exit(1)
         from .gui import main as gui_main
         gui_main()
+
+    elif args.mode == "plugins":
+        # Plugin management mode
+        from .plugin_loader import PluginLoader
+        dirs = [args.plugins_dir] if args.plugins_dir else None
+        loader = PluginLoader(plugin_dirs=dirs)
+        loader.discover()
+        table = loader.print_plugin_table()
+        print("\nAvailable Plugins:")
+        print(table)
+        categories = loader.list_categories()
+        if categories:
+            print(f"\nCategories: {', '.join(f'{k}({v})' for k, v in categories.items())}")
+        print()
 
 
 if __name__ == "__main__":

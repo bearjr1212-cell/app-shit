@@ -1,66 +1,14 @@
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
+*.pyc
+*.pyo
 .eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-venv/
-env/
-ENV/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Database
-*.db
-*.db-wal
-*.db-shm
-pos_recon_data.db*
-
-# Logs
-*.log
-
-# Captures
-*.pcap
-*.pcapng
-handshakes/
-exports/
-
-# Temporary
-*.tmp
-output*.txt
-check*.txt
-ifaces*.txt
-help.txt
-
-# Build artifacts
-posframework.egg-info/
 dist/
 build/
+.env
+.venv/
+*.db
+exports/
+*.pcap
+.idea/
+.vscode/

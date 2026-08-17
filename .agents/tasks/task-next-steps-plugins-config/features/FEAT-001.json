@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-001",
+  "type": "chore",
+  "description": "Project housekeeping: Create proper README.md with project description/usage, requirements.txt with all dependencies, and .gitignore for Python projects. Also implement LinuxMonitorManager class in monitor_mode.py.",
+  "status": "completed",
+  "steps": [
+    "Create a comprehensive README.md at the repo root covering: project name (POSFramework v2.1.0), description, features list, installation instructions (pip install -e .), usage examples for each CLI mode (recon, attack, full, analyze, export, terminal, gui), requirements (root/admin, wireless adapters), and platform support (Linux + Windows).",
+    "Create requirements.txt at the repo root listing: scapy, manuf, pyyaml (for upcoming config feature). These should match what setup.py already has plus the new YAML dependency.",
+    "Create .gitignore at the repo root with standard Python ignores: __pycache__/, *.pyc, *.pyo, .eggs/, *.egg-info/, dist/, build/, .env, .venv/, *.db, exports/, *.pcap, .idea/, .vscode/.",
+    "Implement LinuxMonitorManager class in posframework/monitor_mode.py that extends MonitorManagerInterface. It should: use 'iw' and 'ip' commands to enable/disable monitor mode, support channel setting via 'iw dev <iface> set channel <ch>', handle interface renaming (e.g., wlan0 -> wlan0mon), save/restore original state, implement get_mac_address using 'ip link show', implement set_mac_address using 'ip link set dev <iface> address <mac>'. Follow the same pattern as WindowsMonitorManager.",
+    "Update the module-level setup_monitor_mode() function in monitor_mode.py to auto-detect platform (IS_LINUX vs IS_WINDOWS) and use LinuxMonitorManager on Linux instead of always using WindowsChipMonitorManager.",
+    "Update posframework/__init__.py to export LinuxMonitorManager.",
+    "Update posframework/recon.py to use the platform-appropriate monitor manager (use setup_monitor_mode which now handles both platforms)."
+  ],
+  "acceptance_criteria": [
+    "README.md exists with installation and usage documentation",
+    "requirements.txt exists with scapy, manuf, pyyaml listed",
+    ".gitignore exists with Python-standard ignores",
+    "LinuxMonitorManager class exists in monitor_mode.py inheriting MonitorManagerInterface",
+    "LinuxMonitorManager implements all abstract methods (check_supported, enable_monitor_mode, disable_monitor_mode, set_channel, get_mac_address, set_mac_address)",
+    "setup_monitor_mode() function works on both Linux and Windows by detecting platform",
+    "Running 'python -c \"from posframework.monitor_mode import LinuxMonitorManager\"' succeeds"
+  ],
+  "verification": [
+    "python -c \"import posframework; print(posframework.__version__)\"",
+    "python -c \"from posframework.monitor_mode import LinuxMonitorManager; print('LinuxMonitorManager imported OK')\"",
+    "python -c \"from posframework.monitor_mode import setup_monitor_mode; print('setup_monitor_mode imported OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": "Network access is restricted (INTEGRATIONS_ONLY mode). Cannot pip install scapy/manuf, so full 'import posframework' fails due to missing scapy dependency. Verification was done via direct module loading (importlib) bypassing __init__.py. All files compile cleanly. LinuxMonitorManager imports and passes all interface checks when loaded in isolation. pyenv needed to be set to 3.12.13 for python command to work."
+}

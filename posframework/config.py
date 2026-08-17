@@ -84,3 +84,66 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("POSFramework")
+
+
+# ─── Config File Loading ─────────────────────────────────────────────────────
+
+def load_config(path=None, profile=None):
+    """
+    Load configuration from a YAML file and update module-level constants.
+
+    Uses ConfigLoader to read a YAML config file, then updates the
+    module-level constants in this module with the loaded values.
+    Existing defaults serve as fallbacks for any values not specified
+    in the config file.
+
+    Args:
+        path: Path to a YAML config file. If None, searches default locations.
+        profile: Name of a profile to activate for overrides.
+
+    Returns:
+        The ConfigLoader instance for further access.
+    """
+    from .config_loader import ConfigLoader
+
+    config = ConfigLoader(config_path=path, profile=profile)
+
+    # Update module-level constants from loaded config
+    global CHANNEL_HOP_INTERVAL, STATUS_INTERVAL
+    global DEAUTH_BURST_COUNT, DEAUTH_BURST_INTERVAL
+    global BEACON_INTERVAL
+    global CAPTIVE_PORTAL_PORT, CAPTIVE_PORTAL_SSL_PORT
+    global NETWORK_GW_IP, NETWORK_MASK, NETWORK_IP, DHCP_LEASE
+    global DEFAULT_MONITOR_IFACE, DEFAULT_AP_IFACE
+
+    CHANNEL_HOP_INTERVAL = config.get("recon.channel_hop_interval", CHANNEL_HOP_INTERVAL)
+    STATUS_INTERVAL = config.get("recon.status_interval", STATUS_INTERVAL)
+    DEAUTH_BURST_COUNT = config.get("attack.deauth_burst_count", DEAUTH_BURST_COUNT)
+    DEAUTH_BURST_INTERVAL = config.get("attack.deauth_burst_interval", DEAUTH_BURST_INTERVAL)
+    BEACON_INTERVAL = config.get("attack.beacon_interval", BEACON_INTERVAL)
+    CAPTIVE_PORTAL_PORT = config.get("rogue_ap.captive_portal_port", CAPTIVE_PORTAL_PORT)
+    CAPTIVE_PORTAL_SSL_PORT = config.get("rogue_ap.captive_portal_ssl_port", CAPTIVE_PORTAL_SSL_PORT)
+
+    # Only update network settings if they resolve to non-empty values
+    gw = config.get("rogue_ap.network_gw_ip", "")
+    if gw:
+        NETWORK_GW_IP = gw
+    mask = config.get("rogue_ap.network_mask", "")
+    if mask:
+        NETWORK_MASK = mask
+    net_ip = config.get("rogue_ap.network_ip", "")
+    if net_ip:
+        NETWORK_IP = net_ip
+    lease = config.get("rogue_ap.dhcp_lease", "")
+    if lease:
+        DHCP_LEASE = lease
+
+    # Update interface defaults
+    iface = config.get("general.interface", None)
+    if iface:
+        DEFAULT_MONITOR_IFACE = iface
+    ap_iface = config.get("general.ap_interface", None)
+    if ap_iface:
+        DEFAULT_AP_IFACE = ap_iface
+
+    return config

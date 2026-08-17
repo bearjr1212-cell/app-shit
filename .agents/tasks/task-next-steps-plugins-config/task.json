@@ -1,0 +1,7 @@
+{
+  "task_id": "task-next-steps-plugins-config",
+  "task_description": "Implement next steps (README, requirements.txt, .gitignore, Linux monitor mode), dynamic plugin loading for attack modules, YAML config file support, and real-world recon attack flow.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}
