@@ -9,6 +9,7 @@ Modes:
   recon   - Passive scan only (populates database)
   attack  - Auto-targeted attack using existing recon data
   full    - Recon then auto-attack (fully automated)
+  auto    - Full lifecycle flow (env setup -> recon -> score -> attack -> cleanup)
 
 Stage 2 Features:
   - Signal strength targeting (RSSI filtering)
@@ -212,6 +213,24 @@ def build_parser():
     # ── GUI mode ──────────────────────────────────────────────────────────────
     sub.add_parser("gui", help="Launch Tkinter graphical interface")
 
+    # ── Auto mode ─────────────────────────────────────────────────────────────
+    auto = sub.add_parser("auto",
+        help="Fully automated recon-to-attack flow (environment -> recon -> attack -> cleanup)")
+    auto.add_argument("-i", "--interface", default=DEFAULT_MONITOR_IFACE,
+                      help=f"Monitor mode interface (default: {DEFAULT_MONITOR_IFACE})")
+    auto.add_argument("-a", "--ap-interface", default=DEFAULT_AP_IFACE,
+                      help=f"AP/injection interface (default: {DEFAULT_AP_IFACE})")
+    auto.add_argument("--5ghz", dest="use_5ghz", action="store_true",
+                      help="Include 5GHz channels in scan")
+    auto.add_argument("--auto-duration", type=int, default=300,
+                      help="Total operation time in seconds (default: 300)")
+    auto.add_argument("--auto-max-targets", type=int, default=3,
+                      help="Maximum number of targets to attack (default: 3)")
+    auto.add_argument("--stealth", action="store_true",
+                      help="Use slower/quieter techniques for reduced detection")
+    auto.add_argument("--plugins-dir", default=None,
+                      help="Additional plugins directory to scan")
+
     # ── Plugins mode ──────────────────────────────────────────────────────────
     plugins_parser = sub.add_parser("plugins",
         help="Plugin management (list, info)")
@@ -387,6 +406,31 @@ def main():
             sys.exit(1)
         from .gui import main as gui_main
         gui_main()
+
+    elif args.mode == "auto":
+        # Fully automated recon-to-attack flow
+        from .attack_flow import ReconAttackFlow
+        flow = ReconAttackFlow(
+            interface=args.interface,
+            ap_interface=args.ap_interface,
+            duration=args.auto_duration,
+            max_targets=args.auto_max_targets,
+            stealth=getattr(args, 'stealth', False),
+            use_5ghz=getattr(args, 'use_5ghz', False),
+            plugins_dir=getattr(args, 'plugins_dir', None),
+            config=config,
+        )
+
+        def auto_shutdown(signum, frame):
+            log.info("Shutting down auto flow...")
+            flow.stop()
+
+        signal.signal(signal.SIGINT, auto_shutdown)
+        if not IS_WINDOWS:
+            signal.signal(signal.SIGTERM, auto_shutdown)
+
+        results = flow.run()
+        log.info(f"Auto mode complete. Results: {results}")
 
     elif args.mode == "plugins":
         # Plugin management mode
