@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "feat",
   "description": "Dynamic plugin loading system for attack modules. Replace the static imports in orchestrator.py with a plugin discovery/registration system that can load attack modules dynamically from a plugins directory or from the existing posframework/ modules.",
-  "status": "pending",
+  "status": "in_progress",
   "steps": [
     "Create posframework/plugin_loader.py with a PluginLoader class that: (a) defines a base AttackPlugin abstract class with methods: name(), description(), setup(config), execute(context), teardown(), (b) discovers plugins from a configurable directory (default: posframework/plugins/ and any user-specified path), (c) loads Python modules dynamically using importlib, (d) registers plugins by category (recon, deauth, mitm, dos, printer, etc.), (e) provides get_plugin(name), get_plugins_by_category(category), list_plugins() methods, (f) supports enabling/disabling plugins via configuration.",
     "Create posframework/plugins/ directory with an __init__.py.",
