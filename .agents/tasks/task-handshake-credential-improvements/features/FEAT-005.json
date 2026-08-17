@@ -2,7 +2,7 @@
   "id": "FEAT-005",
   "type": "fix",
   "description": "Address review findings: SQLite cursor concurrency, ARP sweep timing, NTLM bind interface, VLANScanner public wait method, _packets_processed lock, _parse_cidr dedup, hccapx message pair derivation, HTTPS stale iptables cleanup, auto-pivot world-readable credentials",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Fix database.py: Add connection-level lock around all cursor.execute calls for thread safety",
     "Fix vlan_scanner.py: Overlap sniff and send in arp_scan_vlan; add public wait_for_completion method; protect _packets_processed with _lock",
@@ -37,5 +37,5 @@
     "python3 -c \"import ast; ast.parse(open('posframework/net_utils.py').read()); print('net_utils.py OK')\""
   ],
   "blocked_reason": null,
-  "findings": null
+  "findings": "All 9 fixes implemented and verified. 67 Python files pass ast.parse. Created shared net_utils.py to eliminate code duplication. Database lock wraps all cursor operations (setup, insert/update, query, commit). ARP sweeps now start a background sniff thread before sending to capture early replies. NTLM SMB server uses get_interface_ip() to bind to specific interface. Orchestrator uses public wait_for_completion() API. Message pair in hccapx derived from actual captured EAPOL messages. HTTPS interceptor cleans up stale iptables on start. Auto-pivot config gets 0o600 permissions."
 }
