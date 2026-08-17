@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+lib/*.so
+*.db
+*.db-wal
+*.db-shm
+handshakes/*.pcap
+exports/
+.env

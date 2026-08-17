@@ -58,11 +58,12 @@ Package modules:
     print_interceptor - Print job interception
     printer_creds - Printer credential harvesting
     monitor_mode - Windows monitor mode management
+    interface_manager - Auto-discovery & interface assignment
     monitor_windows - Windows monitor mode utility
     __main__     - CLI entry point
 """
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 from .config import DB_NAME, CHANNELS_24GHZ, CHANNELS_5GHZ, log
 from .database import POSDatabase
@@ -94,3 +95,5 @@ from .print_interceptor import PrintJobInterceptor
 from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
 from .plugin_loader import PluginLoader, AttackPlugin
 from .config_loader import ConfigLoader
+from .interface_manager import InterfaceManager, auto_detect_interfaces, setup_dual_interfaces
+from .shared import identify_eapol_message, enable_ip_forwarding, ARPSpoofer, build_beacon_frame

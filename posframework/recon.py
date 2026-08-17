@@ -39,6 +39,13 @@ from .monitor_mode import (
     WindowsMonitorManager, check_npcap_monitor_support
 )
 
+# Native C channel hopping — falls back to subprocess if unavailable
+try:
+    from .native.channel_hop import set_channel as native_set_channel
+    _HAS_NATIVE_CHANNEL_HOP = True
+except ImportError:
+    _HAS_NATIVE_CHANNEL_HOP = False
+
 
 # ANSI color codes for terminal output (Windows 10+ compatible)
 class Colors:
@@ -113,9 +120,15 @@ class ReconEngine:
             return "Unknown"
 
     def _set_channel(self, channel: int):
-        """Set channel — Linux uses iw, Windows skips (Npcap handles it)."""
+        """Set channel — uses native C wrapper for speed, falls back to iw subprocess."""
         if IS_WINDOWS:
             return  # Windows Npcap doesn't support manual channel hopping
+        if _HAS_NATIVE_CHANNEL_HOP:
+            try:
+                native_set_channel(self.interface, channel)
+                return
+            except Exception:
+                pass  # Fall through to subprocess
         try:
             subprocess.run(["iw", "dev", self.interface, "set", "channel", str(channel)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
@@ -184,7 +197,9 @@ class ReconEngine:
         """
         if len(eapol_raw) < 10:
             return 0
-        key_info = struct.unpack(">H", eapol_raw[5:7])[0]
+        # Use memoryview for zero-copy slicing
+        mv = memoryview(eapol_raw) if not isinstance(eapol_raw, memoryview) else eapol_raw
+        key_info = struct.unpack(">H", mv[5:7])[0]
         key_ack = (key_info >> 7) & 1
         key_mic = (key_info >> 8) & 1
         secure = (key_info >> 9) & 1
@@ -195,7 +210,7 @@ class ReconEngine:
         # Extract key data length for additional validation
         key_data_length = 0
         if len(eapol_raw) >= 99:
-            key_data_length = struct.unpack(">H", eapol_raw[97:99])[0]
+            key_data_length = struct.unpack(">H", mv[97:99])[0]
 
         # Group Key Handshake (2-way, pairwise bit = 0)
         if not pairwise:
@@ -223,13 +238,30 @@ class ReconEngine:
     def packet_handler(self, pkt):
         if not pkt.haslayer(Dot11):
             return
+
+        # ── Packet pre-filtering: skip frame types we don't process ──
+        dot11 = pkt.getlayer(Dot11)
+        ftype = dot11.type
+        fsubtype = dot11.subtype
+        # Type 0 = Management, Type 2 = Data
+        # Skip Control frames (type 1) entirely — we never process them
+        if ftype == 1:
+            return
+        # For management frames, only process subtypes we handle:
+        #   0=AssocReq, 2=ReassoReq, 4=ProbeReq, 5=ProbeResp, 8=Beacon,
+        #   10=Disassoc, 12=Deauth
+        if ftype == 0 and fsubtype not in (0, 2, 4, 5, 8, 10, 12):
+            return
+
         self._packets_processed += 1
         rssi = -100
         if hasattr(pkt, 'dBm_AntSignal'):
             rssi = pkt.dBm_AntSignal
         elif hasattr(pkt, 'notdecoded'):
             try:
-                rssi = -(256 - max(ord(pkt.notdecoded[-4:-3]), ord(pkt.notdecoded[-2:-1])))
+                nd = pkt.notdecoded
+                nd_view = memoryview(nd) if isinstance(nd, (bytes, bytearray)) else nd
+                rssi = -(256 - max(nd_view[-4], nd_view[-2]))
             except (TypeError, IndexError):
                 pass
 
@@ -250,7 +282,7 @@ class ReconEngine:
             self._handle_deauth(pkt, rssi)
         elif pkt.haslayer(Dot11AssoReq) or pkt.haslayer(Dot11ReassoReq):
             self._handle_association(pkt, rssi)
-        elif pkt.type == 2:
+        elif ftype == 2:
             self._handle_data(pkt, rssi)
 
     def _log_verbose_packet(self, pkt, rssi):

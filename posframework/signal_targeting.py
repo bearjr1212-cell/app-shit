@@ -24,18 +24,23 @@ class SignalTargeting:
     def __init__(self, rssi_threshold=-70):
         self.rssi_threshold = rssi_threshold
         self._client_rssis = defaultdict(list)  # client_mac -> list of RSSI samples
+        self._cached_avg = {}  # client_mac -> running average RSSI
         self._priority_queue = []  # Sorted list of (rssi, client_mac, bssid)
 
     def add_sample(self, client_mac, bssid, rssi):
-        """Record an RSSI sample for a client."""
-        self._client_rssis[client_mac].append(rssi)
+        """Record an RSSI sample for a client and update running average."""
+        samples = self._client_rssis[client_mac]
+        n = len(samples) + 1
+        if client_mac in self._cached_avg:
+            old_avg = self._cached_avg[client_mac]
+            self._cached_avg[client_mac] = (old_avg * (n - 1) + rssi) / n
+        else:
+            self._cached_avg[client_mac] = rssi
+        samples.append(rssi)
 
     def get_avg_rssi(self, client_mac):
-        """Get average RSSI for a client."""
-        if client_mac not in self._client_rssis:
-            return -100
-        samples = self._client_rssis[client_mac]
-        return sum(samples) / len(samples)
+        """Get average RSSI for a client (O(1) cached lookup)."""
+        return self._cached_avg.get(client_mac, -100)
 
     def get_priority(self, client_mac):
         """
@@ -55,8 +60,7 @@ class SignalTargeting:
     def should_deauth(self, client_mac):
         """Return True if client should be targeted for deauth."""
         avg = self.get_avg_rssi(client_mac)
-        # Target clients within ~20 meters (RSSI > -80 dBm)
-        return avg > -80
+        return avg > self.rssi_threshold
 
     def should_deauth_with_rssi(self, client_mac, rssi):
         """Return True if client should be targeted using provided RSSI value."""

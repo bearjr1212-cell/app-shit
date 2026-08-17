@@ -60,7 +60,10 @@ def check_database_schema(db):
             'clients': ['mac', 'vendor', 'associated_bssid', 'probed_ssids'],
             'deauth_events': ['src_mac', 'dst_mac', 'bssid', 'reason'],
             'eapol_frames': ['client_mac', 'bssid', 'frame_number'],
-            'credentials': ['client_ip', 'username', 'password', 'url']
+            'credentials': ['client_ip', 'username', 'password', 'url'],
+            'printers': ['ip', 'model', 'manufacturer', 'hostname'],
+            'print_jobs': ['printer_ip', 'source_ip', 'document_name'],
+            'printer_credentials': ['printer_ip', 'username', 'password', 'auth_method']
         }
         
         all_valid = True
@@ -102,6 +105,9 @@ def check_recon_data(db):
         print(f"  Deauth Events: {stats['deauth_events']}")
         print(f"  EAPOL Frames: {stats['eapol_frames']}")
         print(f"  Credentials: {stats['credentials']}")
+        print(f"  Printers: {stats['printers']}")
+        print(f"  Print Jobs: {stats['print_jobs']}")
+        print(f"  Printer Credentials: {stats['printer_credentials']}")
         
         total_captures = sum(stats.values())
         
@@ -261,8 +267,8 @@ def check_attack_module_queries(db):
             clients = db.get_clients_for_bssid(target_bssid)
             print(f"  ✓ Found {len(clients)} clients associated with target AP")
             if clients:
-                for mac in clients[:3]:
-                    print(f"    - {mac}")
+                for mac, rssi in clients[:3]:
+                    print(f"    - {mac} (RSSI: {rssi} dBm)")
         
         # 5. Get all AP-client mappings
         print("\nTesting: get_all_ap_clients()")

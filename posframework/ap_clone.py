@@ -77,13 +77,10 @@ class APCloneEngine:
     def _load_target_from_db(self):
         """Load target AP info from database."""
         try:
-            self.db.cursor.execute(
-                'SELECT ssid, channel FROM access_points WHERE bssid = ?',
-                (self.target_bssid,))
-            row = self.db.cursor.fetchone()
+            row = self.db.get_ap_by_bssid(self.target_bssid)
             if row:
-                self.target_ssid = row[0] or "FreeWiFi"
-                self.target_channel = row[1] or 6
+                self.target_ssid = row[1] or "FreeWiFi"
+                self.target_channel = row[2] or 6
                 self._current_channel = self.target_channel
         except Exception as e:
             log.error(f"AP Clone: Failed to load target from DB: {e}")

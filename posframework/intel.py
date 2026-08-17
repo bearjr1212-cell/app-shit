@@ -5,6 +5,8 @@ OUI vendor string matching and SSID pattern detection for identifying
 Point-of-Sale terminals, payment infrastructure, and retail networking.
 """
 
+import re
+
 POS_VENDORS = frozenset([
     # Payment terminals
     "verifone", "ingenico", "pax", "newland", "castles technology",
@@ -46,15 +48,18 @@ POS_SSID_PATTERNS = frozenset([
 ])
 
 
+# Precompiled regex for O(1) matching instead of O(n) linear scan
+_POS_VENDOR_RE = re.compile('|'.join(re.escape(v) for v in POS_VENDORS), re.IGNORECASE)
+_POS_SSID_RE = re.compile('|'.join(re.escape(p) for p in POS_SSID_PATTERNS), re.IGNORECASE)
+
+
 def is_pos_vendor(vendor: str) -> bool:
     """Check if OUI vendor string matches known POS manufacturers."""
-    vendor_lower = vendor.lower()
-    return any(v in vendor_lower for v in POS_VENDORS)
+    return bool(_POS_VENDOR_RE.search(vendor))
 
 
 def is_pos_ssid(ssid: str) -> bool:
     """Check if SSID matches common POS/retail naming patterns."""
     if not ssid:
         return False
-    ssid_lower = ssid.lower()
-    return any(p in ssid_lower for p in POS_SSID_PATTERNS)
+    return bool(_POS_SSID_RE.search(ssid))
