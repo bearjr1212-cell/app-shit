@@ -2,7 +2,7 @@
   "id": "FEAT-006",
   "type": "fix",
   "description": "Address v2 review findings: VLAN-tagged inter-VLAN probes, payment classifier false positives, ACL gap propagation, double-persist guard, and proper CIDR parsing",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Fix network_mapper.py _detect_inter_vlan_routing: Add Dot1Q tags to probe packets and document trunk port requirement",
     "Fix network_mapper.py _classify_segment: Require at least one POS-specific port (4100, 9100, 20000) for payment classification",
@@ -24,5 +24,5 @@
     "python3 -c \"import ast; import glob; files=glob.glob('posframework/**/*.py', recursive=True); [ast.parse(open(f).read()) for f in files]; print(f'All {len(files)} files parse OK')\""
   ],
   "blocked_reason": null,
-  "findings": null
+  "findings": "All 5 v2 review issues addressed. parse_cidr now properly handles arbitrary prefix lengths with tests confirming /24=254, /28=14, /16=1024 (clamped), /32=1, /31=2 hosts. Inter-VLAN probes use Ether()/Dot1Q(vlan=src_vlan)/IP()/ICMP() framing. Payment classifier requires at least one of 4100/9100/20000 present. ACL gaps propagated via _propagate_acl_gaps() method. Double-persist prevented by _persisted flag. Bidirectional changed to 0 since we only test one direction per probe. All 67 files pass ast.parse."
 }
