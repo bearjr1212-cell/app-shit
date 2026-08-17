@@ -2,7 +2,7 @@
   "id": "FEAT-003",
   "type": "feat",
   "description": "Config file support using YAML format. Add ability to load framework configuration from a YAML file, with CLI arguments overriding file values. Support profiles for different attack scenarios.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Create posframework/config_loader.py with a ConfigLoader class that: (a) loads configuration from a YAML file (default: posframework.yaml or ~/.posframework.yaml), (b) supports a 'profiles' section for named attack configurations (e.g., stealth, aggressive, recon-only), (c) merges config file values with CLI arguments (CLI takes precedence), (d) validates configuration values with sensible defaults matching current config.py constants, (e) supports environment variable interpolation in YAML values (e.g., ${POSFW_NETWORK_GW}), (f) provides a get(key, default) method and attribute-style access.",
     "Create a default config template file at the repo root: posframework.yaml.example with all configurable options documented with comments. Sections should include: general (interface, ap_interface, channels), recon (timeout, channel_hop_interval, status_interval), attack (deauth_burst_count, beacon_interval, rssi_limit), rogue_ap (network settings, captive portal), plugins (enabled plugins list, plugin directories), profiles (stealth, aggressive, recon-only presets with different parameter values).",
@@ -26,5 +26,5 @@
     "python -c \"from posframework.config_loader import ConfigLoader; c = ConfigLoader(); print(f'Default profile: {c.get(\\\"general.interface\\\", \\\"wlan0mon\\\")}')\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "YAML import is optional (try/except with YAML_AVAILABLE flag). ConfigLoader works without pyyaml installed, returning defaults. Verification done via direct module import (sys.path) since scapy is not available in this environment. All py_compile checks pass. Environment variable interpolation tested with os.environ. Profile overrides verified for stealth and aggressive."
 }
