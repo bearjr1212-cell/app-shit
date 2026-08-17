@@ -59,6 +59,7 @@ class KnownBeaconsEngine:
         self._thread = None
         self._ssid_list = list(KNOWN_SSIDS)
         self._frames = []
+        self._frames_dirty = True  # Flag to rebuild frames only when SSIDs change
         self._offset = 0
         self._last_rotate = time.time()
 
@@ -69,9 +70,13 @@ class KnownBeaconsEngine:
         """
         try:
             probed = db.get_probed_ssids()
+            added = 0
             for ssid in probed:
                 if ssid not in self._ssid_list:
                     self._ssid_list.append(ssid)
+                    added += 1
+            if added > 0:
+                self._frames_dirty = True
             log.info(f"Beacons: {len(self._ssid_list)} total SSIDs (including probed)")
         except Exception as e:
             log.warning(f"Could not load probed SSIDs from database: {e}")
@@ -94,6 +99,12 @@ class KnownBeaconsEngine:
 
     def _beacon_loop(self):
         while self.running:
+            # Only rebuild frames when SSID list has changed
+            if self._frames_dirty:
+                self._frames = self._build_frames()
+                self._frames_dirty = False
+                self._offset = 0
+
             now = time.time()
             if now - self._last_rotate > KNOWN_BEACON_ROTATE:
                 self._offset = (self._offset + KNOWN_BEACON_BATCH) % len(self._frames)

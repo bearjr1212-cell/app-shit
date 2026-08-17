@@ -15,6 +15,10 @@ from .intel import is_pos_ssid
 
 
 class POSDatabase:
+    # Write batching: buffer writes and flush every COMMIT_INTERVAL seconds
+    # or when buffer exceeds BATCH_FLUSH_SIZE items
+    BATCH_FLUSH_SIZE = 50
+
     def __init__(self, db_path=None):
         self.conn = sqlite3.connect(db_path or DB_NAME, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -26,6 +30,8 @@ class POSDatabase:
         self._setup_tables()
         self._last_commit = time.monotonic()
         self._commit_lock = threading.Lock()
+        self._write_buffer = []
+        self._buffer_lock = threading.Lock()
 
     def _setup_tables(self):
         with self._lock:
@@ -191,11 +197,38 @@ class POSDatabase:
             self.conn.commit()
 
     def _maybe_commit(self):
+        """Flush buffered writes when interval elapsed or buffer is full."""
         now = time.monotonic()
         with self._commit_lock:
-            if now - self._last_commit >= COMMIT_INTERVAL:
+            buffer_size = len(self._write_buffer)
+            elapsed = now - self._last_commit >= COMMIT_INTERVAL
+            if elapsed or buffer_size >= self.BATCH_FLUSH_SIZE:
+                self._flush_buffer()
                 self.conn.commit()
                 self._last_commit = now
+
+    def _buffer_write(self, sql, params):
+        """Add a write operation to the buffer and flush if needed."""
+        with self._buffer_lock:
+            self._write_buffer.append((sql, params))
+            if len(self._write_buffer) >= self.BATCH_FLUSH_SIZE:
+                self._flush_buffer()
+                with self._commit_lock:
+                    self.conn.commit()
+                    self._last_commit = time.monotonic()
+
+    def _flush_buffer(self):
+        """Execute all buffered write operations."""
+        with self._buffer_lock:
+            if not self._write_buffer:
+                return
+            with self._lock:
+                for sql, params in self._write_buffer:
+                    try:
+                        self.cursor.execute(sql, params)
+                    except sqlite3.Error as e:
+                        log.debug(f"Buffered write error: {e}")
+            self._write_buffer.clear()
 
     def update_ap(self, bssid, ssid, vendor, channel, security, rssi, is_pos, is_hidden):
         now = datetime.now().isoformat(timespec='seconds')
@@ -535,10 +568,12 @@ class POSDatabase:
         return stats
 
     def flush(self):
+        self._flush_buffer()
         with self._lock:
             self.conn.commit()
 
     def close(self):
+        self._flush_buffer()
         with self._lock:
             self.conn.commit()
             self.conn.close()

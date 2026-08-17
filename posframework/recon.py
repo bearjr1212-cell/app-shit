@@ -15,7 +15,6 @@ import subprocess
 import time
 import threading
 import sys
-from functools import lru_cache
 from collections import defaultdict
 
 from scapy.all import sniff, raw, conf, Raw
@@ -33,8 +32,7 @@ from .config import (
 )
 from .intel import is_pos_vendor, is_pos_ssid
 from .crypto import parse_rsn_ie, parse_wpa_ie, classify_security
-from .wireshark_capture import WiresharkCapture
-from .tshark_decrypt import TsharkDecryptionEngine, LiveDecryptionSession
+from .tshark_decrypt import TsharkDecryptionEngine, LiveDecryptionSession, WiresharkCapture
 from .pywhat_analyzer import PyWhatAnalyzer, PyWhatCallback
 from .monitor_mode import (
     setup_monitor_mode, teardown_monitor_mode,
@@ -121,13 +119,39 @@ class ReconEngine:
         self._pywhat_enabled = pywhat_enabled
         self._pywhat_callback: 'PyWhatCallback | None' = None
 
-    @lru_cache(maxsize=16384)
+    _VENDOR_CACHE_MAX = 1024
+    _VENDOR_CACHE_TTL = 60  # seconds
+
     def _get_vendor(self, mac: str) -> str:
+        """Lookup vendor with bounded TTL cache (max 1024 entries, 60s TTL)."""
+        now = time.time()
+        cache = getattr(self, '_vendor_cache', None)
+        if cache is None:
+            self._vendor_cache = {}
+            cache = self._vendor_cache
+
+        entry = cache.get(mac)
+        if entry is not None:
+            value, ts = entry
+            if now - ts < self._VENDOR_CACHE_TTL:
+                return value
+            # Expired, remove it
+            del cache[mac]
+
+        # Evict oldest entries if at capacity
+        if len(cache) >= self._VENDOR_CACHE_MAX:
+            # Remove ~25% oldest entries
+            sorted_keys = sorted(cache, key=lambda k: cache[k][1])
+            for k in sorted_keys[:len(sorted_keys) // 4]:
+                del cache[k]
+
         try:
             v = self.parser.get_manuf(mac)
-            return v if v else "Unknown"
+            result = v if v else "Unknown"
         except Exception:
-            return "Unknown"
+            result = "Unknown"
+        cache[mac] = (result, now)
+        return result
 
     def _set_channel(self, channel: int):
         """Set channel — uses native C wrapper for speed, falls back to iw subprocess."""

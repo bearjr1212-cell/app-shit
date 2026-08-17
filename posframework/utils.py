@@ -1,11 +1,11 @@
 """
-Shared utilities — consolidates duplicated functionality.
+Shared utilities for POSFramework.
 
-Extracts common patterns used across multiple modules:
-  - EAPOL message identification (was in recon.py, orchestrator.py, krack.py, handshake.py)
-  - IP forwarding management (was in mitm.py, ssl_strip.py, rogueap.py)
-  - ARP poisoning (was in mitm.py, ssl_strip.py, print_interceptor.py)
-  - Beacon frame construction (was in beacons.py, karma.py, dos_wifi.py, network_disruption.py)
+Consolidated common patterns used across multiple modules:
+  - EAPOL message identification
+  - IP forwarding management
+  - ARP poisoning
+  - Beacon frame construction
 """
 
 import struct

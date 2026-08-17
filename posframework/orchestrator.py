@@ -26,32 +26,8 @@ from .config import CHANNELS_24GHZ, WIFI_BROADCAST, log
 from .database import POSDatabase
 from .recon import ReconEngine
 from .deauth import DeauthEngine
-from .beacons import KnownBeaconsEngine
-from .karma import KARMAEngine
-from .rogueap import RogueAPEngine
 from .handshake import HandshakeCapture
-from .isolation import IsolationDetector
 from .signal_targeting import SignalTargeting
-from .cred_tester import CredentialTester
-from .mitm import MITMEngine, HTTPInjector
-from .ssl_strip import SSLStripper
-from .dns_spoof import DNSSpoofEngine
-from .cred_harvester import CredentialHarvester
-from .network_disruption import NetworkDisruption, DeauthStorm
-from .post_attack import PostAttackAnalyzer
-from .ap_clone import APCloneEngine
-from .krack import KRACKEngine
-from .dos_wifi import WiFiDoSEngine
-from .client_isolation import ClientIsolationEngine
-from .printer_recon import PrinterRecon
-from .print_interceptor import PrintJobInterceptor
-from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
-from .auto_pivot import AutoPivot
-from .client_profiler import ClientProfiler
-from .cred_enrichment import CredentialEnrichment
-from .hashcat_integration import HashcatIntegration
-from .vlan_scanner import VLANScanner
-from .network_mapper import NetworkSegmentationMapper
 
 
 class AttackOrchestrator:
@@ -127,7 +103,10 @@ class AttackOrchestrator:
         self.karma = None
         self.handshakes = HandshakeCapture()
         self.signal_filter = SignalTargeting(rssi_threshold=signal_rssi_limit)
-        self.cred_tester = CredentialTester(monitor_iface) if test_credentials else None
+        self.cred_tester = None
+        if test_credentials:
+            from .cred_tester import CredentialTester
+            self.cred_tester = CredentialTester(monitor_iface)
         self.isolation_detector = None
 
         # New attack modules
@@ -231,6 +210,28 @@ class AttackOrchestrator:
 
     def start(self):
         """Execute the full automated attack chain."""
+        # Lazy imports for optional modules
+        from .beacons import KnownBeaconsEngine
+        from .karma import KARMAEngine
+        from .rogueap import RogueAPEngine
+        from .isolation import IsolationDetector
+        from .cred_tester import CredentialTester
+        from .mitm import MITMEngine
+        from .dns_spoof import DNSSpoofEngine
+        from .cred_harvester import CredentialHarvester
+        from .ap_clone import APCloneEngine
+        from .krack import KRACKEngine
+        from .dos_wifi import WiFiDoSEngine
+        from .client_isolation import ClientIsolationEngine
+        from .printer_recon import PrinterRecon
+        from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
+        from .cred_enrichment import CredentialEnrichment
+        from .client_profiler import ClientProfiler
+        from .auto_pivot import AutoPivot
+        from .hashcat_integration import HashcatIntegration
+        from .vlan_scanner import VLANScanner
+        from .network_mapper import NetworkSegmentationMapper
+
         self.running = True
         self._attack_start_time = time.time()
         log.info(f"Attack chain initiated at {time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -544,6 +545,8 @@ class AttackOrchestrator:
 
     def _run_post_attack_analysis(self):
         """Generate post-attack analysis and next steps."""
+        from .post_attack import PostAttackAnalyzer
+
         log.info("=" * 60)
         log.info("POST-ATTACK ANALYSIS")
         log.info("=" * 60)

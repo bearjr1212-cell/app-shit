@@ -8,7 +8,7 @@ to connect to our evil twin.
 RSSI threshold: Clients with RSSI > -70 dBm are considered "close range"
 """
 
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from .config import log
 
@@ -23,20 +23,26 @@ class SignalTargeting:
 
     def __init__(self, rssi_threshold=-70):
         self.rssi_threshold = rssi_threshold
-        self._client_rssis = defaultdict(list)  # client_mac -> list of RSSI samples
+        self._client_rssis = defaultdict(lambda: deque(maxlen=100))  # client_mac -> bounded deque of RSSI samples
         self._cached_avg = {}  # client_mac -> running average RSSI
         self._priority_queue = []  # Sorted list of (rssi, client_mac, bssid)
 
     def add_sample(self, client_mac, bssid, rssi):
         """Record an RSSI sample for a client and update running average."""
         samples = self._client_rssis[client_mac]
-        n = len(samples) + 1
-        if client_mac in self._cached_avg:
-            old_avg = self._cached_avg[client_mac]
-            self._cached_avg[client_mac] = (old_avg * (n - 1) + rssi) / n
+        if client_mac in self._cached_avg and len(samples) > 0:
+            # If deque is full, recompute average after oldest is evicted
+            if len(samples) == samples.maxlen:
+                samples.append(rssi)
+                self._cached_avg[client_mac] = sum(samples) / len(samples)
+            else:
+                n = len(samples) + 1
+                old_avg = self._cached_avg[client_mac]
+                self._cached_avg[client_mac] = (old_avg * (n - 1) + rssi) / n
+                samples.append(rssi)
         else:
             self._cached_avg[client_mac] = rssi
-        samples.append(rssi)
+            samples.append(rssi)
 
     def get_avg_rssi(self, client_mac):
         """Get average RSSI for a client (O(1) cached lookup)."""

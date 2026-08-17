@@ -8,10 +8,13 @@ build/
 .env
 .venv/
 *.db
+*.db-shm
+*.db-wal
 exports/
 *.pcap
 .idea/
 .vscode/
-
-# Kiro MCP Manager - Sensitive configuration files
-.kiro/settings/
+.agents/
+.code-intel/
+.kiro/
+documents/templates/
