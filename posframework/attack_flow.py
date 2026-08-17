@@ -292,13 +292,21 @@ class ReconAttackFlow:
     def _load_plugins(self):
         """Load plugins if plugin system is available."""
         try:
-            from .plugin_loader import PluginLoader
+            from .plugin_system import PluginManager
+            from pathlib import Path
 
-            dirs = [self.plugins_dir] if self.plugins_dir else None
-            self._plugin_loader = PluginLoader(plugin_dirs=dirs)
-            count = self._plugin_loader.discover()
-            if count > 0:
-                log.info(f"  Plugins: {count} loaded")
+            manager = PluginManager()
+            dirs_to_scan = []
+            if self.plugins_dir:
+                dirs_to_scan.append(Path(self.plugins_dir))
+
+            total = 0
+            for d in dirs_to_scan:
+                if d.is_dir():
+                    total += manager.discover(d)
+
+            if total > 0:
+                log.info(f"  Plugins: {total} loaded")
             else:
                 log.info("  Plugins: none found")
         except Exception as e:

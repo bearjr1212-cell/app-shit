@@ -75,45 +75,40 @@ def sample_plugin_dir(tmp_path):
     plugin_dir.mkdir()
 
     plugin_code = '''
-from posframework.plugin_loader import AttackPlugin
+from posframework.plugin_system import BasePlugin, PluginMetadata, PluginType
 
-class SamplePlugin(AttackPlugin):
-    def name(self) -> str:
-        return "sample-plugin"
 
-    def description(self) -> str:
-        return "A sample test plugin"
+class SamplePlugin(BasePlugin):
+    @staticmethod
+    def metadata():
+        return PluginMetadata(
+            name="sample-plugin",
+            version="1.0.0",
+            description="A sample test plugin",
+            plugin_type=PluginType.SCANNER,
+        )
 
-    def category(self) -> str:
-        return "recon"
+    async def on_start(self):
+        pass
 
-    def setup(self, config):
-        return True
-
-    def execute(self, context):
-        return {"status": "executed"}
-
-    def teardown(self):
+    def on_tick(self, ctx):
         pass
 
 
-class AnotherPlugin(AttackPlugin):
-    def name(self) -> str:
-        return "another-plugin"
+class AnotherPlugin(BasePlugin):
+    @staticmethod
+    def metadata():
+        return PluginMetadata(
+            name="another-plugin",
+            version="1.0.0",
+            description="Another test plugin",
+            plugin_type=PluginType.ATTACK,
+        )
 
-    def description(self) -> str:
-        return "Another test plugin"
+    async def on_start(self):
+        pass
 
-    def category(self) -> str:
-        return "deauth"
-
-    def setup(self, config):
-        return True
-
-    def execute(self, context):
-        return {"status": "done"}
-
-    def teardown(self):
+    def on_tick(self, ctx):
         pass
 '''
     (plugin_dir / "test_plugins.py").write_text(plugin_code)

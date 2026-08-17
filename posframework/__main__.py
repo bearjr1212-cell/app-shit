@@ -429,16 +429,20 @@ def main():
 
     elif args.mode == "plugins":
         # Plugin management mode
-        from .plugin_loader import PluginLoader
-        dirs = [args.plugins_dir] if args.plugins_dir else None
-        loader = PluginLoader(plugin_dirs=dirs)
-        loader.discover()
-        table = loader.print_plugin_table()
+        from .plugin_system import PluginManager
+        from pathlib import Path
+        manager = PluginManager()
+        dirs = [Path(args.plugins_dir)] if args.plugins_dir else []
+        for d in dirs:
+            if d.is_dir():
+                manager.discover(d)
+        status = manager.get_all_status()
         print("\nAvailable Plugins:")
-        print(table)
-        categories = loader.list_categories()
-        if categories:
-            print(f"\nCategories: {', '.join(f'{k}({v})' for k, v in categories.items())}")
+        if status:
+            for s in status:
+                print(f"  {s['name']} v{s['version']} [{s['type']}] - {s['state']}")
+        else:
+            print("  No plugins loaded.")
         print()
 
 

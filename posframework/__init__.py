@@ -59,7 +59,10 @@ Package modules:
     printer_creds - Printer credential harvesting
     monitor_mode - Windows monitor mode management
     monitor_windows - Windows monitor mode utility
-    plugin_loader - Dynamic plugin system
+    event_bus    - Async pub/sub event system
+    plugin_system - Modern plugin architecture with lifecycle management
+    capability_manager - Hardware-aware feature gating
+    models       - Domain dataclasses (AccessPoint, Client, Target, etc.)
     config_loader - YAML configuration loader
     target_scorer - Target scoring and ranking
     attack_selector - Attack chain selection logic
@@ -120,7 +123,10 @@ from .printer_recon import PrinterRecon
 from .ipp_scanner import IPPScanner
 from .print_interceptor import PrintJobInterceptor
 from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
-from .plugin_loader import PluginLoader, AttackPlugin
+from .plugin_system import BasePlugin, PluginManager, PluginMetadata, PluginState, PluginType
+from .event_bus import EventBus, EventType, Event, get_event_bus
+from .capability_manager import CapabilityManager, HardwareRequirement, MockCapabilityManager
+from .models import AccessPoint, Client, Handshake, Credential, Target, EncryptionType
 from .config_loader import ConfigLoader
 from .target_scorer import TargetScorer, ScoredTarget
 from .attack_selector import AttackSelector, AttackChain, AttackStep
