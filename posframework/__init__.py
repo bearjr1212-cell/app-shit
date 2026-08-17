@@ -102,11 +102,14 @@ from .network_disruption import NetworkDisruption, DeauthStorm
 from .post_attack import PostAttackAnalyzer
 from .monitor_mode import (
     setup_monitor_mode, teardown_monitor_mode,
+    enhanced_setup_monitor_mode,
     WindowsMonitorManager, LinuxMonitorManager,
     ChipMonitorManager, WindowsChipMonitorManager,
     check_npcap_monitor_support, get_available_interfaces,
     get_interface_mac, MonitorModeError, MonitorManagerInterface
 )
+from .chip_detector import ChipDetector, ChipInfo, MonitorMethodSelector
+from .monitor_manager import EnhancedMonitorManager
 from .ap_clone import APCloneEngine
 from .krack import KRACKEngine
 from .dos_wifi import WiFiDoSEngine, DoSMode

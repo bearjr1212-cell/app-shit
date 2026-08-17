@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "tshark decryption integration - create a TsharkDecryption module that lists what tshark can decrypt and integrates live decryption during recon (WPA/WPA2 with known PSK, 802.11 frame analysis, protocol dissection including EAPOL, DNS, HTTP, DHCP).",
+  "status": "pending",
+  "steps": [
+    "Create posframework/tshark_decrypt.py with a TsharkDecryptionEngine class that: (1) Lists all supported tshark decryption capabilities as a DECRYPTION_CAPABILITIES dict mapping protocol names to their tshark decryption options (e.g., 'wpa-pwd' for WPA-PSK, 'wpa-psk' for raw PSK hex, 'wep' for WEP keys, 'tls' for TLS with keylog). (2) Has a method list_capabilities() that returns human-readable descriptions of what can be decrypted. (3) Has a method build_decrypt_args(psk=None, ssid=None, wep_keys=None, tls_keylog=None) that builds the appropriate -o 'uat:80211_keys:...' or -o 'wlan.enable_decryption:TRUE' tshark arguments.",
+    "Add a LiveDecryptionSession class in posframework/tshark_decrypt.py that: (1) Starts a tshark process with decryption enabled and live output parsing (-T fields mode for structured data or -T json for JSON output). (2) Parses decrypted frames in real-time via a background thread. (3) Extracts protocol-specific data from decrypted traffic: DNS queries/responses, HTTP requests/URLs, DHCP leases, EAPOL handshake details, cleartext credentials. (4) Provides a callback mechanism so ReconEngine can receive decrypted data. (5) Has start(interface, psk, ssid), stop(), get_decrypted_summary() methods.",
+    "Add a PROTOCOL_DISSECTORS dict in posframework/tshark_decrypt.py listing all 802.11 protocol dissectors tshark provides: wlan (802.11), wlan_mgt (management frames), eapol, eap, radius, dns, http, dhcp, dhcpv6, mdns, llmnr, nbns, smb, smb2, ldap, kerberos, tls. For each, include: field name, display filter, and description of what it reveals in a recon context.",
+    "Integrate TsharkDecryptionEngine with ReconEngine in posframework/recon.py: Add an optional tshark_psk parameter to ReconEngine.__init__(). When provided, create a LiveDecryptionSession that runs alongside the scapy sniffer. Add a _handle_decrypted_data() callback method that logs decrypted traffic summaries and stores them in the database via self.db.",
+    "Create tests/test_tshark_decrypt.py with unit tests mocking subprocess calls: test capability listing, test decrypt argument building for various scenarios (WPA-PSK, WEP, TLS), test LiveDecryptionSession start/stop lifecycle, test parsing of tshark JSON output for DNS/HTTP/DHCP extraction.",
+    "Update posframework/__init__.py to export TsharkDecryptionEngine, LiveDecryptionSession from tshark_decrypt module."
+  ],
+  "acceptance_criteria": [
+    "posframework/tshark_decrypt.py passes AST validation",
+    "tests/test_tshark_decrypt.py passes AST validation",
+    "DECRYPTION_CAPABILITIES covers at minimum: WPA-PSK, WPA2-PSK, WEP, TLS with keylog file",
+    "PROTOCOL_DISSECTORS lists at least 10 relevant 802.11/network protocols with descriptions",
+    "LiveDecryptionSession uses subprocess.Popen with proper cleanup (terminate/kill)",
+    "ReconEngine integration adds tshark_psk parameter and conditional LiveDecryptionSession",
+    "posframework/__init__.py exports new classes without syntax errors",
+    "posframework/recon.py passes AST validation after modification"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('posframework/tshark_decrypt.py').read()); print('tshark_decrypt.py: OK')\"",
+    "python3 -c \"import ast; ast.parse(open('tests/test_tshark_decrypt.py').read()); print('test_tshark_decrypt.py: OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/__init__.py').read()); print('__init__.py: OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/recon.py').read()); print('recon.py: OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

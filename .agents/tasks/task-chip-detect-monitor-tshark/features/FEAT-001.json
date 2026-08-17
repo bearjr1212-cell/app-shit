@@ -1,0 +1,33 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Automatic chip detection module - detect WiFi chipset from /sys/class/net, lspci, lsusb, ethtool, and iw info, then return optimal monitor mode configuration for that chip. Integrate with LinuxMonitorManager for automatic best-method selection (airmon-ng, iw, or direct driver commands).",
+  "status": "in_progress",
+  "steps": [
+    "Create posframework/chip_detector.py with a ChipDetector class that probes multiple sources: (1) /sys/class/net/<iface>/device/driver symlink for kernel driver name, (2) /sys/class/net/<iface>/device/uevent for PCI/USB vendor:product IDs, (3) lspci -k output for PCI wireless devices, (4) lsusb output for USB wireless adapters, (5) ethtool -i <iface> for driver/firmware info, (6) iw dev <iface> info and iw phy <phy> info for capabilities. Return a ChipInfo dataclass with fields: driver, vendor (Intel/Broadcom/Atheros/Realtek/MediaTek/Ralink), model, bus_type (pci/usb), vendor_id, product_id, firmware_version, supported_modes, injection_support.",
+    "Add a MonitorMethodSelector class in posframework/chip_detector.py that takes a ChipInfo and returns the optimal monitor mode method: 'airmon-ng' for cards known to work best with airmon (ath9k, ath9k_htc), 'iw' for standard nl80211 cards (iwlwifi, mt76), 'driver' for cards requiring direct driver commands (rtl88xxau). Include a priority-ordered list of methods to try with fallback.",
+    "Create posframework/monitor_manager.py (new enhanced module) with an EnhancedMonitorManager class that: (1) auto-detects chip via ChipDetector, (2) selects best method via MonitorMethodSelector, (3) implements enable/disable with automatic cleanup via atexit and signal handlers (SIGINT, SIGTERM), (4) tracks interface state (original_name, current_name, original_mode, original_mac, monitor_active, method_used), (5) implements retry logic with fallback methods if primary method fails. Include methods: enable_monitor_mode(), disable_monitor_mode(), cleanup() registered with atexit, set_channel(), get_status() returning a dict of current state.",
+    "Add integration with the existing setup_monitor_mode() function in posframework/monitor_mode.py - update setup_monitor_mode() to optionally use EnhancedMonitorManager when available. Add a new function enhanced_setup_monitor_mode(interface) that uses the full chip detection pipeline.",
+    "Create tests/test_chip_detector.py with unit tests using unittest.mock to mock subprocess calls and /sys filesystem reads. Test: chip detection from various driver names, monitor method selection for different chipsets, fallback behavior when primary method fails, state tracking during enable/disable lifecycle.",
+    "Update posframework/__init__.py to export ChipDetector, ChipInfo, MonitorMethodSelector, EnhancedMonitorManager from the new modules."
+  ],
+  "acceptance_criteria": [
+    "posframework/chip_detector.py passes AST validation (valid Python syntax)",
+    "posframework/monitor_manager.py passes AST validation",
+    "tests/test_chip_detector.py passes AST validation",
+    "ChipDetector class handles all 6 detection sources (sysfs, lspci, lsusb, ethtool, iw dev, iw phy)",
+    "MonitorMethodSelector returns different methods for different chip families (ath9k -> airmon-ng, iwlwifi -> iw, rtl88xxau -> driver)",
+    "EnhancedMonitorManager registers atexit cleanup handler and signal handlers",
+    "EnhancedMonitorManager implements retry with fallback methods",
+    "posframework/__init__.py imports the new classes without syntax errors"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('posframework/chip_detector.py').read()); print('chip_detector.py: OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/monitor_manager.py').read()); print('monitor_manager.py: OK')\"",
+    "python3 -c \"import ast; ast.parse(open('tests/test_chip_detector.py').read()); print('test_chip_detector.py: OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/__init__.py').read()); print('__init__.py: OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/monitor_mode.py').read()); print('monitor_mode.py: OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

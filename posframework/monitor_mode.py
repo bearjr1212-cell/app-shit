@@ -698,6 +698,43 @@ def check_npcap_monitor_support() -> bool:
     return False
 
 
+def enhanced_setup_monitor_mode(interface: str) -> Tuple[bool, Optional[object]]:
+    """Set up monitor mode using the full chip detection pipeline.
+
+    Uses EnhancedMonitorManager for automatic chip detection, best method
+    selection, and retry with fallback. Only supported on Linux.
+
+    Args:
+        interface: The network interface name (e.g., 'wlan0').
+
+    Returns:
+        Tuple of (success, EnhancedMonitorManager instance or None).
+    """
+    if not IS_LINUX:
+        log.warning("Enhanced monitor mode setup is only supported on Linux")
+        return (False, None)
+
+    try:
+        from .monitor_manager import EnhancedMonitorManager
+    except ImportError as e:
+        log.error(f"Could not import EnhancedMonitorManager: {e}")
+        return (False, None)
+
+    log.info(f"Enhanced monitor mode setup for: {interface}")
+    manager = EnhancedMonitorManager(interface)
+    success = manager.enable_monitor_mode()
+
+    if success:
+        log.info(
+            f"Enhanced monitor mode active on {manager.state.current_name} "
+            f"(method: {manager.state.method_used})"
+        )
+        return (True, manager)
+    else:
+        log.error(f"Enhanced monitor mode setup failed for {interface}")
+        return (False, None)
+
+
 def get_available_interfaces() -> List[Dict[str, str]]:
     """Get a list of available wireless interfaces on Windows.
 

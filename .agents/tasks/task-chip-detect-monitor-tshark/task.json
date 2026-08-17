@@ -1,0 +1,7 @@
+{
+  "task_id": "task-chip-detect-monitor-tshark",
+  "task_description": "Add automatic WiFi chip detection with optimal monitor mode configuration, enhanced monitor mode lifecycle management with auto-cleanup, and tshark decryption integration for live protocol analysis during recon.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}

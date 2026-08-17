@@ -1,0 +1,26 @@
+{
+  "project_type": "Python WiFi reconnaissance/attack framework (POSFramework v2.1.0)",
+  "language": "Python 3.8+",
+  "build_system": "setuptools via setup.py, pip install -e .",
+  "test_framework": "pytest with conftest.py fixtures in tests/ directory",
+  "build_command": "python3 -c \"import ast, pathlib; [ast.parse(f.read_text()) for f in pathlib.Path('posframework').rglob('*.py')]\"",
+  "test_command": "python3 -c \"import ast, pathlib; [ast.parse(f.read_text()) for f in pathlib.Path('tests').rglob('*.py')]\"",
+  "verification_instructions": "Since we cannot install dependencies (scapy, manuf, pyyaml) in this environment, use AST parsing to validate all Python files have valid syntax. Run python3 -c to parse each new/modified file.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "Cannot install packages - INTEGRATIONS_ONLY network mode. Use AST validation only.",
+  "environment_constraints": "INTEGRATIONS_ONLY network mode - no pip install, no Docker. Only pre-installed Python 3.12 is available with no packages. All verification must use AST parsing (python3 -c 'import ast; ast.parse(open(\"file.py\").read())'). Cannot run pytest or import posframework modules.",
+  "contribution_requirements": "Follow existing code patterns. Use type hints. Include docstrings. Cross-platform where applicable (IS_LINUX, IS_WINDOWS checks).",
+  "key_patterns": "MonitorManagerInterface is the abstract base class. LinuxMonitorManager uses iw/ip commands. ChipMonitorManager detects by OUI. LinuxInterfaceDiscovery in interface_manager.py already reads /sys/class/net, iw dev, ethtool for driver/chipset. ReconEngine has self._monitor_manager and uses setup_monitor_mode(). WiresharkCapture in wireshark_capture.py wraps tshark CLI. Modules export via posframework/__init__.py.",
+  "relevant_files": [
+    "posframework/monitor_mode.py",
+    "posframework/interface_manager.py",
+    "posframework/recon.py",
+    "posframework/wireshark_capture.py",
+    "posframework/config.py",
+    "posframework/__init__.py",
+    "posframework/native/channel_hop.py",
+    "tests/conftest.py",
+    "tests/test_config.py"
+  ],
+  "directory_structure": "posframework/ - main package with config.py, recon.py, monitor_mode.py, interface_manager.py, wireshark_capture.py, __init__.py, native/ (C bindings), tools/ (external tool integrations), plugins/. tests/ - pytest tests. Root has README.md, requirements.txt, setup.py, pytest.ini."
+}
