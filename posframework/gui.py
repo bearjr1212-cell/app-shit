@@ -13,12 +13,14 @@ Full-featured graphical interface for POSFramework with:
 """
 
 import os
+import re
 import sys
 import time
 import json
 import logging
 import threading
 import queue
+import ipaddress
 from datetime import datetime, timedelta
 
 try:
@@ -62,6 +64,27 @@ try:
 except ImportError as e:
     SCAPY_AVAILABLE = False
     _SCAPY_IMPORT_ERROR = str(e)
+
+
+# ─── Validation Helpers ──────────────────────────────────────────────────────
+
+_MAC_RE = re.compile(
+    r"^([0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}$"
+)
+
+
+def _is_valid_mac(value):
+    """Return True if *value* is a well-formed MAC address."""
+    return bool(_MAC_RE.match(value))
+
+
+def _is_valid_ip(value):
+    """Return True if *value* is a valid IPv4 or IPv6 address."""
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 
 # ─── Color Theme ─────────────────────────────────────────────────────────────
@@ -117,6 +140,7 @@ class POSFrameworkGUI:
     TITLE = "POSFramework v2.1.0 - WiFi Reconnaissance & Attack Suite"
     REFRESH_INTERVAL_MS = 2000
     STATUS_UPDATE_MS = 1000
+    LOG_MAX_LINES = 10000
 
     def __init__(self, root):
         self.root = root
@@ -134,6 +158,9 @@ class POSFrameworkGUI:
         self.refresh_interval = self.REFRESH_INTERVAL_MS
         self.log_queue = queue.Queue()
         self.message_queue = queue.Queue()
+
+        # Threading lock for engine state transitions
+        self._state_lock = threading.Lock()
 
         # Engine references
         self.recon_engine = None
@@ -156,6 +183,9 @@ class POSFrameworkGUI:
         # Active modules counter
         self.active_modules_count = 0
 
+        # After IDs for cancellable timers
+        self._refresh_after_id = None
+
         # Initialize database
         self._init_database()
 
@@ -169,7 +199,8 @@ class POSFrameworkGUI:
 
         # Start periodic updates
         self.root.after(100, self._process_log_queue)
-        self.root.after(self.refresh_interval, self._refresh_data)
+        self.root.after(200, self._process_message_queue)
+        self._schedule_refresh()
         self.root.after(self.STATUS_UPDATE_MS, self._update_status_bar)
 
         # Initial log messages
@@ -946,6 +977,7 @@ class POSFrameworkGUI:
 
                 self.log_text.configure(state="normal")
                 self.log_text.insert(tk.END, msg + "\n", level)
+                self._trim_log_widget()
                 self.log_text.see(tk.END)
                 self.log_text.configure(state="disabled")
         except queue.Empty:
@@ -953,10 +985,81 @@ class POSFrameworkGUI:
         finally:
             self.root.after(100, self._process_log_queue)
 
+    def _trim_log_widget(self):
+        """Trim the log widget to LOG_MAX_LINES lines (ring-buffer behavior)."""
+        line_count = int(self.log_text.index("end-1c").split(".")[0])
+        if line_count > self.LOG_MAX_LINES:
+            overflow = line_count - self.LOG_MAX_LINES
+            self.log_text.delete("1.0", f"{overflow + 1}.0")
+
+    # ─── Message Queue Consumer ──────────────────────────────────────────────
+
+    def _process_message_queue(self):
+        """Drain the message_queue and reconcile UI button/label states."""
+        try:
+            while True:
+                msg_type, _payload = self.message_queue.get_nowait()
+                self._handle_state_message(msg_type)
+        except queue.Empty:
+            pass
+        finally:
+            self.root.after(200, self._process_message_queue)
+
+    def _handle_state_message(self, msg_type):
+        """Reconcile button and label states based on engine messages."""
+        if msg_type == "recon_started":
+            self.recon_start_btn.configure(state="disabled")
+            self.recon_stop_btn.configure(state="normal")
+            self.recon_status_label.configure(
+                text="Status: Running", foreground=COLORS["accent_green"])
+        elif msg_type == "recon_stopped":
+            self.recon_start_btn.configure(state="normal")
+            self.recon_stop_btn.configure(state="disabled")
+            self.recon_status_label.configure(
+                text="Status: Stopped", foreground=COLORS["accent_red"])
+        elif msg_type == "attack_started":
+            self.attack_start_btn.configure(state="disabled")
+            self.attack_stop_btn.configure(state="normal")
+            self.attack_status_label.configure(
+                text="Status: Running", foreground=COLORS["accent_green"])
+        elif msg_type == "attack_stopped":
+            self.attack_start_btn.configure(state="normal")
+            self.attack_stop_btn.configure(state="disabled")
+            self.attack_status_label.configure(
+                text="Status: Stopped", foreground=COLORS["accent_red"])
+        elif msg_type == "mitm_started":
+            self.mitm_start_btn.configure(state="disabled")
+            self.mitm_stop_btn.configure(state="normal")
+            self.mitm_status_label.configure(
+                text="Status: Running", foreground=COLORS["accent_green"])
+        elif msg_type == "mitm_stopped":
+            self.mitm_start_btn.configure(state="normal")
+            self.mitm_stop_btn.configure(state="disabled")
+            self.mitm_status_label.configure(
+                text="Status: Stopped", foreground=COLORS["accent_red"])
+        elif msg_type == "printer_recon_started":
+            self.printer_start_btn.configure(state="disabled")
+            self.printer_stop_btn.configure(state="normal")
+            self.printer_status_label.configure(
+                text="Status: Running", foreground=COLORS["accent_green"])
+        elif msg_type == "printer_recon_stopped":
+            self.printer_start_btn.configure(state="normal")
+            self.printer_stop_btn.configure(state="disabled")
+            self.printer_status_label.configure(
+                text="Status: Stopped", foreground=COLORS["accent_red"])
+
     # ─── Data Refresh ────────────────────────────────────────────────────────
+
+    def _schedule_refresh(self):
+        """Schedule the next data refresh, cancelling any pending one."""
+        if self._refresh_after_id is not None:
+            self.root.after_cancel(self._refresh_after_id)
+            self._refresh_after_id = None
+        self._refresh_after_id = self.root.after(self.refresh_interval, self._refresh_data)
 
     def _refresh_data(self):
         """Periodically refresh data from the database."""
+        self._refresh_after_id = None
         if self.db is not None:
             try:
                 self._update_ap_table()
@@ -966,7 +1069,7 @@ class POSFrameworkGUI:
             except Exception as e:
                 log.debug(f"Data refresh error: {e}")
 
-        self.root.after(self.refresh_interval, self._refresh_data)
+        self._schedule_refresh()
 
     def _update_ap_table(self):
         """Update the AP Treeview from the database."""
@@ -1127,9 +1230,11 @@ class POSFrameworkGUI:
             log.error("Cannot start recon: scapy is not available")
             return
 
-        if self.recon_running:
-            log.warning("Recon is already running")
-            return
+        with self._state_lock:
+            if self.recon_running:
+                log.warning("Recon is already running")
+                return
+            self.recon_running = True
 
         iface = self.recon_iface_var.get()
         channels = []
@@ -1141,8 +1246,22 @@ class POSFrameworkGUI:
         if not channels:
             channels = CHANNELS_24GHZ
 
+        # Validate timeout
         timeout_str = self.recon_timeout_var.get().strip()
-        timeout = int(timeout_str) if timeout_str.isdigit() else None
+        timeout = None
+        if timeout_str:
+            if not timeout_str.isdigit() or int(timeout_str) == 0:
+                log.error("Timeout must be a positive integer (seconds)")
+                with self._state_lock:
+                    self.recon_running = False
+                return
+            timeout = int(timeout_str)
+
+        # Disable buttons immediately; message_queue consumer will reconcile
+        self.recon_start_btn.configure(state="disabled")
+        self.recon_stop_btn.configure(state="disabled")
+        self.recon_status_label.configure(text="Status: Starting...",
+                                          foreground=COLORS["accent_yellow"])
 
         def run_recon():
             try:
@@ -1152,44 +1271,47 @@ class POSFrameworkGUI:
                 if self.signal_targeting_var.get():
                     self.recon_engine.set_signal_targeting(True)
                 log.info(f"Starting recon on {iface} (channels: {len(channels)})")
-                self.recon_running = True
                 self.message_queue.put(("recon_started", None))
                 self.recon_engine.start(timeout=timeout)
             except Exception as e:
                 log.error(f"Recon error: {e}")
             finally:
-                self.recon_running = False
+                with self._state_lock:
+                    self.recon_running = False
                 self.message_queue.put(("recon_stopped", None))
 
         thread = threading.Thread(target=run_recon, daemon=True)
         thread.start()
 
-        self.recon_start_btn.configure(state="disabled")
-        self.recon_stop_btn.configure(state="normal")
-        self.recon_status_label.configure(text="Status: Running",
-                                          foreground=COLORS["accent_green"])
-
     def _stop_recon(self):
         """Stop reconnaissance."""
-        if self.recon_engine is not None:
+        with self._state_lock:
+            if not self.recon_running:
+                return
+            engine = self.recon_engine
+
+        if engine is not None:
             log.info("Stopping recon...")
+
+            # Disable both buttons while stopping
+            self.recon_start_btn.configure(state="disabled")
+            self.recon_stop_btn.configure(state="disabled")
+            self.recon_status_label.configure(text="Status: Stopping...",
+                                              foreground=COLORS["accent_yellow"])
 
             def stop_recon():
                 try:
-                    self.recon_engine.stop()
+                    engine.stop()
                 except Exception as e:
                     log.error(f"Error stopping recon: {e}")
                 finally:
-                    self.recon_running = False
+                    with self._state_lock:
+                        self.recon_running = False
+                        self.recon_engine = None
                     self.message_queue.put(("recon_stopped", None))
 
             thread = threading.Thread(target=stop_recon, daemon=True)
             thread.start()
-
-        self.recon_start_btn.configure(state="normal")
-        self.recon_stop_btn.configure(state="disabled")
-        self.recon_status_label.configure(text="Status: Stopped",
-                                          foreground=COLORS["accent_red"])
 
     # ─── Attack Operations ───────────────────────────────────────────────────
 
@@ -1199,11 +1321,25 @@ class POSFrameworkGUI:
             log.error("Cannot start attack: scapy is not available")
             return
 
-        if self.attack_running:
-            log.warning("Attack is already running")
+        with self._state_lock:
+            if self.attack_running:
+                log.warning("Attack is already running")
+                return
+            self.attack_running = True
+
+        # Validate BSSID if provided
+        target_bssid = self.attack_target_var.get().strip() or None
+        if target_bssid and not _is_valid_mac(target_bssid):
+            log.error(f"Invalid BSSID format: {target_bssid} (expected XX:XX:XX:XX:XX:XX)")
+            with self._state_lock:
+                self.attack_running = False
             return
 
-        target_bssid = self.attack_target_var.get().strip() or None
+        # Disable buttons immediately
+        self.attack_start_btn.configure(state="disabled")
+        self.attack_stop_btn.configure(state="disabled")
+        self.attack_status_label.configure(text="Status: Starting...",
+                                           foreground=COLORS["accent_yellow"])
 
         def run_attack():
             try:
@@ -1224,7 +1360,6 @@ class POSFrameworkGUI:
                     enable_client_isolation=self.attack_modules["client_isolation"].get(),
                     enable_printer_attacks=self.attack_modules["printer_attacks"].get(),
                 )
-                self.attack_running = True
                 self.message_queue.put(("attack_started", None))
                 log.info("Starting attack orchestration...")
 
@@ -1237,38 +1372,41 @@ class POSFrameworkGUI:
             except Exception as e:
                 log.error(f"Attack error: {e}")
             finally:
-                self.attack_running = False
+                with self._state_lock:
+                    self.attack_running = False
                 self.message_queue.put(("attack_stopped", None))
 
         thread = threading.Thread(target=run_attack, daemon=True)
         thread.start()
 
-        self.attack_start_btn.configure(state="disabled")
-        self.attack_stop_btn.configure(state="normal")
-        self.attack_status_label.configure(text="Status: Running",
-                                           foreground=COLORS["accent_green"])
-
     def _stop_attack(self):
         """Stop attack orchestration."""
-        if self.orchestrator is not None:
+        with self._state_lock:
+            if not self.attack_running:
+                return
+            orch = self.orchestrator
+
+        if orch is not None:
             log.info("Stopping attack...")
+
+            self.attack_start_btn.configure(state="disabled")
+            self.attack_stop_btn.configure(state="disabled")
+            self.attack_status_label.configure(text="Status: Stopping...",
+                                               foreground=COLORS["accent_yellow"])
 
             def stop_attack():
                 try:
-                    self.orchestrator.stop()
+                    orch.stop()
                 except Exception as e:
                     log.error(f"Error stopping attack: {e}")
                 finally:
-                    self.attack_running = False
+                    with self._state_lock:
+                        self.attack_running = False
+                        self.orchestrator = None
                     self.message_queue.put(("attack_stopped", None))
 
             thread = threading.Thread(target=stop_attack, daemon=True)
             thread.start()
-
-        self.attack_start_btn.configure(state="normal")
-        self.attack_stop_btn.configure(state="disabled")
-        self.attack_status_label.configure(text="Status: Stopped",
-                                           foreground=COLORS["accent_red"])
 
     def _auto_target(self):
         """Auto-select the strongest AP from the database."""
@@ -1307,20 +1445,43 @@ class POSFrameworkGUI:
             log.error("Cannot start MITM: scapy is not available")
             return
 
-        if self.mitm_running:
-            log.warning("MITM is already running")
-            return
+        with self._state_lock:
+            if self.mitm_running:
+                log.warning("MITM is already running")
+                return
+            self.mitm_running = True
 
         target_ip = self.mitm_target_var.get().strip()
         gateway_ip = self.mitm_gateway_var.get().strip()
 
         if not target_ip:
             log.error("Target IP is required for MITM")
+            with self._state_lock:
+                self.mitm_running = False
             return
+
+        # Validate target IP
+        if not _is_valid_ip(target_ip):
+            log.error(f"Invalid target IP address: {target_ip}")
+            with self._state_lock:
+                self.mitm_running = False
+            return
+
+        # Validate gateway IP if provided
+        if gateway_ip and not _is_valid_ip(gateway_ip):
+            log.error(f"Invalid gateway IP address: {gateway_ip}")
+            with self._state_lock:
+                self.mitm_running = False
+            return
+
+        # Disable buttons immediately
+        self.mitm_start_btn.configure(state="disabled")
+        self.mitm_stop_btn.configure(state="disabled")
+        self.mitm_status_label.configure(text="Status: Starting...",
+                                         foreground=COLORS["accent_yellow"])
 
         def run_mitm():
             try:
-                self.mitm_running = True
                 self.message_queue.put(("mitm_started", None))
 
                 # Start ARP poisoning / MITM engine
@@ -1365,46 +1526,53 @@ class POSFrameworkGUI:
             except Exception as e:
                 log.error(f"MITM error: {e}")
             finally:
-                self.mitm_running = False
+                with self._state_lock:
+                    self.mitm_running = False
                 self.message_queue.put(("mitm_stopped", None))
 
         thread = threading.Thread(target=run_mitm, daemon=True)
         thread.start()
 
-        self.mitm_start_btn.configure(state="disabled")
-        self.mitm_stop_btn.configure(state="normal")
-        self.mitm_status_label.configure(text="Status: Running",
-                                         foreground=COLORS["accent_green"])
-
     def _stop_mitm(self):
         """Stop MITM attack."""
+        with self._state_lock:
+            if not self.mitm_running:
+                return
+            self.mitm_running = False
+            mitm_eng = self.mitm_engine
+            ssl_str = self.ssl_stripper
+            dns_sp = self.dns_spoofer
+            cred_h = self.cred_harvester
+
         log.info("Stopping MITM...")
-        self.mitm_running = False
+
+        self.mitm_start_btn.configure(state="disabled")
+        self.mitm_stop_btn.configure(state="disabled")
+        self.mitm_status_label.configure(text="Status: Stopping...",
+                                         foreground=COLORS["accent_yellow"])
 
         def stop_mitm():
             try:
-                if self.mitm_engine:
-                    self.mitm_engine.stop()
-                    self.mitm_engine = None
-                if self.ssl_stripper:
-                    self.ssl_stripper.stop()
-                    self.ssl_stripper = None
-                if self.dns_spoofer:
-                    self.dns_spoofer.stop()
-                    self.dns_spoofer = None
-                if self.cred_harvester:
-                    self.cred_harvester.stop()
-                    self.cred_harvester = None
+                if mitm_eng:
+                    mitm_eng.stop()
+                if ssl_str:
+                    ssl_str.stop()
+                if dns_sp:
+                    dns_sp.stop()
+                if cred_h:
+                    cred_h.stop()
             except Exception as e:
                 log.error(f"Error stopping MITM: {e}")
+            finally:
+                with self._state_lock:
+                    self.mitm_engine = None
+                    self.ssl_stripper = None
+                    self.dns_spoofer = None
+                    self.cred_harvester = None
+                self.message_queue.put(("mitm_stopped", None))
 
         thread = threading.Thread(target=stop_mitm, daemon=True)
         thread.start()
-
-        self.mitm_start_btn.configure(state="normal")
-        self.mitm_stop_btn.configure(state="disabled")
-        self.mitm_status_label.configure(text="Status: Stopped",
-                                         foreground=COLORS["accent_red"])
 
     # ─── Printer Operations ──────────────────────────────────────────────────
 
@@ -1414,15 +1582,20 @@ class POSFrameworkGUI:
             log.error("Cannot start printer recon: scapy is not available")
             return
 
-        if self.printer_recon_running:
-            log.warning("Printer recon is already running")
-            return
+        with self._state_lock:
+            if self.printer_recon_running:
+                log.warning("Printer recon is already running")
+                return
+            self.printer_recon_running = True
+
+        # Disable buttons immediately
+        self.printer_start_btn.configure(state="disabled")
+        self.printer_stop_btn.configure(state="disabled")
+        self.printer_status_label.configure(text="Status: Starting...",
+                                            foreground=COLORS["accent_yellow"])
 
         def run_printer_recon():
             try:
-                self.printer_recon_running = True
-                self.message_queue.put(("printer_recon_started", None))
-
                 self.printer_recon = PrinterRecon(self.monitor_iface, db=self.db)
                 self.ipp_scanner = IPPScanner(self.monitor_iface)
                 self.print_interceptor = PrintJobInterceptor(self.monitor_iface, db=self.db)
@@ -1436,52 +1609,61 @@ class POSFrameworkGUI:
                 self.print_interceptor.start()
                 self.printer_cred_harvester.start()
 
+                self.message_queue.put(("printer_recon_started", None))
+
                 while self.printer_recon_running:
                     time.sleep(1)
 
             except Exception as e:
                 log.error(f"Printer recon error: {e}")
             finally:
-                self.printer_recon_running = False
+                with self._state_lock:
+                    self.printer_recon_running = False
                 self.message_queue.put(("printer_recon_stopped", None))
 
         thread = threading.Thread(target=run_printer_recon, daemon=True)
         thread.start()
 
-        self.printer_start_btn.configure(state="disabled")
-        self.printer_stop_btn.configure(state="normal")
-        self.printer_status_label.configure(text="Status: Running",
-                                            foreground=COLORS["accent_green"])
-
     def _stop_printer_recon(self):
         """Stop printer reconnaissance."""
+        with self._state_lock:
+            if not self.printer_recon_running:
+                return
+            self.printer_recon_running = False
+            pr = self.printer_recon
+            ipp = self.ipp_scanner
+            pi = self.print_interceptor
+            pch = self.printer_cred_harvester
+
         log.info("Stopping printer recon...")
-        self.printer_recon_running = False
+
+        self.printer_start_btn.configure(state="disabled")
+        self.printer_stop_btn.configure(state="disabled")
+        self.printer_status_label.configure(text="Status: Stopping...",
+                                            foreground=COLORS["accent_yellow"])
 
         def stop_printer():
             try:
-                if self.printer_recon:
-                    self.printer_recon.stop()
-                    self.printer_recon = None
-                if self.ipp_scanner:
-                    self.ipp_scanner.stop()
-                    self.ipp_scanner = None
-                if self.print_interceptor:
-                    self.print_interceptor.stop()
-                    self.print_interceptor = None
-                if self.printer_cred_harvester:
-                    self.printer_cred_harvester.stop()
-                    self.printer_cred_harvester = None
+                if pr:
+                    pr.stop()
+                if ipp:
+                    ipp.stop()
+                if pi:
+                    pi.stop()
+                if pch:
+                    pch.stop()
             except Exception as e:
                 log.error(f"Error stopping printer recon: {e}")
+            finally:
+                with self._state_lock:
+                    self.printer_recon = None
+                    self.ipp_scanner = None
+                    self.print_interceptor = None
+                    self.printer_cred_harvester = None
+                self.message_queue.put(("printer_recon_stopped", None))
 
         thread = threading.Thread(target=stop_printer, daemon=True)
         thread.start()
-
-        self.printer_start_btn.configure(state="normal")
-        self.printer_stop_btn.configure(state="disabled")
-        self.printer_status_label.configure(text="Status: Stopped",
-                                            foreground=COLORS["accent_red"])
 
     # ─── Credential Operations ───────────────────────────────────────────────
 
@@ -1550,10 +1732,11 @@ class POSFrameworkGUI:
             self._init_database()
             log.info(f"Database changed to: {self.db_path}")
 
-        # Update refresh interval
+        # Update refresh interval - cancel old timer and reschedule
         new_interval = self.settings_refresh_var.get()
         if new_interval != self.refresh_interval:
             self.refresh_interval = new_interval
+            self._schedule_refresh()
             log.info(f"Refresh interval set to {new_interval}ms")
 
         # Update log level
@@ -1590,13 +1773,32 @@ class POSFrameworkGUI:
             self._apply_settings()
 
     def _clear_database(self):
-        """Clear database (not implemented - show warning)."""
+        """Clear all rows from the database tables."""
         result = messagebox.askyesno(
             "Clear Database",
             "This will permanently delete all collected data.\nAre you sure?"
         )
         if result:
-            log.warning("Database clear requested (requires manual confirmation)")
+            if self.db is None:
+                log.error("No database connection available")
+                return
+            try:
+                conn = self.db.conn
+                cursor = conn.cursor()
+                # Retrieve all user tables
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%'"
+                )
+                tables = [row[0] for row in cursor.fetchall()]
+                for table in tables:
+                    cursor.execute(f"DELETE FROM [{table}]")
+                conn.commit()
+                log.info(f"Database cleared: {len(tables)} table(s) emptied")
+                # Refresh UI tables
+                self._refresh_data()
+            except Exception as e:
+                log.error(f"Failed to clear database: {e}")
 
     def _show_about(self):
         """Show the about dialog."""
