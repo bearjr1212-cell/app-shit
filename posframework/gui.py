@@ -532,6 +532,7 @@ class EngineStatus:
                 self.error_msg = str(e)
         else:
             self.status = self.IDLE
+        self.engine = None
 
     def toggle(self, *args, **kwargs):
         """Toggle engine start/stop."""
@@ -2308,9 +2309,19 @@ class TerminalUI:
     def _get_access_points(self) -> List[Dict]:
         """Get access points from database sorted by current sort mode."""
         try:
-            # Use get_pos_access_points() which returns tuples:
-            # (bssid, ssid, channel, vendor, security, rssi)
-            aps = self.db.get_pos_access_points() if hasattr(self.db, 'get_pos_access_points') else []
+            # Query ALL access points directly, computing is_pos from the two real columns
+            aps = []
+            try:
+                cursor = self.db.conn.execute(
+                    "SELECT bssid, ssid, channel, vendor, security, rssi, "
+                    "(is_pos_vendor OR is_pos_ssid) as is_pos "
+                    "FROM access_points ORDER BY rssi DESC LIMIT 100"
+                )
+                aps = cursor.fetchall()
+            except Exception:
+                # Fallback to get_pos_access_points if direct SQL fails
+                if hasattr(self.db, 'get_pos_access_points'):
+                    aps = self.db.get_pos_access_points() or []
 
             # Also get client counts via get_all_ap_clients()
             client_map = {}
@@ -2319,17 +2330,6 @@ class TerminalUI:
                     client_map = self.db.get_all_ap_clients() or {}
                 except Exception:
                     pass
-
-            if not aps:
-                # Fallback to direct SQL if available
-                try:
-                    cursor = self.db.conn.execute(
-                        "SELECT bssid, ssid, channel, vendor, security, rssi, is_pos "
-                        "FROM access_points ORDER BY rssi DESC"
-                    )
-                    aps = cursor.fetchall()
-                except Exception:
-                    return []
 
             if not aps:
                 return []
