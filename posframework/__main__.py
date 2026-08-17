@@ -133,6 +133,13 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="POS Recon & Attack Framework v2 (Stage 2 Enhanced)",
         epilog="Scanned values auto-feed attack modules. No manual targeting required.")
+
+    # Global config arguments (before subcommand)
+    parser.add_argument("--config", dest="config_file", default=None,
+                        help="Path to YAML config file (default: posframework.yaml)")
+    parser.add_argument("--profile", default=None,
+                        help="Activate a named config profile (e.g., stealth, aggressive, recon-only)")
+
     sub = parser.add_subparsers(dest="mode", required=True)
 
     # ── Recon mode ────────────────────────────────────────────────────────────
@@ -227,6 +234,19 @@ def main():
     verify_privileges()
     parser = build_parser()
     args = parser.parse_args()
+
+    # Load config file early (before any other setup)
+    config = None
+    if getattr(args, 'config_file', None) or getattr(args, 'profile', None):
+        from .config import load_config
+        config = load_config(
+            path=getattr(args, 'config_file', None),
+            profile=getattr(args, 'profile', None),
+        )
+    else:
+        # Still try to load default config file if it exists
+        from .config import load_config
+        config = load_config()
 
     if getattr(args, 'list_ifaces', False):
         list_interfaces()

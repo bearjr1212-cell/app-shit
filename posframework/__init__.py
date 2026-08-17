@@ -93,3 +93,4 @@ from .ipp_scanner import IPPScanner
 from .print_interceptor import PrintJobInterceptor
 from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
 from .plugin_loader import PluginLoader, AttackPlugin
+from .config_loader import ConfigLoader

@@ -1,0 +1,112 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# POSFramework Configuration File
+# ──────────────────────────────────────────────────────────────────────────────
+# Copy this file to posframework.yaml (in the working directory)
+# or to ~/.posframework.yaml (in your home directory).
+#
+# Environment variable interpolation is supported using ${VAR_NAME} syntax.
+# CLI arguments always override values set in this file.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ─── General Settings ─────────────────────────────────────────────────────────
+general:
+  # Primary monitor-mode interface for packet capture
+  interface: wlan0mon
+  # Secondary interface for AP operations (evil twin, rogue AP)
+  ap_interface: wlan1
+  # Channel range: "2.4ghz", "5ghz", or "all"
+  channels: "2.4ghz"
+
+# ─── Recon (Passive Scanning) ─────────────────────────────────────────────────
+recon:
+  # Scan duration in seconds (null = unlimited, Ctrl+C to stop)
+  timeout: null
+  # How often to hop channels (seconds). Lower = faster but less dwell time.
+  channel_hop_interval: 0.3
+  # Status output interval (seconds)
+  status_interval: 30
+
+# ─── Attack Parameters ────────────────────────────────────────────────────────
+attack:
+  # Number of deauth frames per burst
+  deauth_burst_count: 5
+  # Delay between deauth frames in a burst (seconds)
+  deauth_burst_interval: 0.1
+  # Beacon frame injection interval (seconds)
+  beacon_interval: 0.1
+  # Minimum RSSI for deauth targeting (ignore weak signals)
+  rssi_limit: -80
+  # Respond to all client probe requests (evil twin lure)
+  enable_karma: true
+  # Enable known-SSID beacon flooding
+  enable_beacons: true
+  # Auto-clone target AP after deauth
+  enable_ap_clone: false
+  # KRACK key reinstallation attack
+  enable_krack: false
+  # WiFi denial of service
+  enable_dos: false
+  # DoS mode: cts_flood, beacon_exhaust, qos_null, fragment
+  dos_mode: cts_flood
+  # Subtle client disassociation
+  enable_client_isolation: false
+  # Printer exploitation modules
+  enable_printer_attacks: false
+
+# ─── Rogue AP / Captive Portal ────────────────────────────────────────────────
+rogue_ap:
+  # Gateway IP for the rogue network (supports env var interpolation)
+  network_gw_ip: "${POSFW_NETWORK_GW}"
+  # Subnet mask
+  network_mask: "${POSFW_NETWORK_MASK}"
+  # Network address
+  network_ip: "${POSFW_NETWORK_IP}"
+  # DHCP lease range and duration
+  dhcp_lease: "${POSFW_DHCP_LEASE}"
+  # Captive portal HTTP port
+  captive_portal_port: 80
+  # Captive portal HTTPS port
+  captive_portal_ssl_port: 443
+
+# ─── Plugins ──────────────────────────────────────────────────────────────────
+plugins:
+  # List of plugin names to enable (empty = none)
+  enabled: []
+  # Additional directory to search for plugins (null = built-in only)
+  plugins_dir: null
+
+# ─── Profiles ─────────────────────────────────────────────────────────────────
+# Profiles are named sets of overrides. Activate with --profile <name>.
+# Keys use dotted notation: "section.key" to override specific values.
+profiles:
+  # Stealth: slow and quiet, avoids detection
+  stealth:
+    recon.channel_hop_interval: 1.0
+    recon.status_interval: 60
+    attack.deauth_burst_count: 2
+    attack.deauth_burst_interval: 0.5
+    attack.beacon_interval: 0.5
+    attack.enable_karma: false
+    attack.enable_dos: false
+
+  # Aggressive: fast and loud, maximum disruption
+  aggressive:
+    recon.channel_hop_interval: 0.1
+    recon.status_interval: 10
+    attack.deauth_burst_count: 10
+    attack.deauth_burst_interval: 0.05
+    attack.beacon_interval: 0.05
+    attack.enable_karma: true
+    attack.enable_ap_clone: true
+    attack.enable_dos: true
+
+  # Recon-only: passive scanning with no attack modules
+  recon-only:
+    attack.deauth_burst_count: 0
+    attack.enable_karma: false
+    attack.enable_beacons: false
+    attack.enable_ap_clone: false
+    attack.enable_krack: false
+    attack.enable_dos: false
+    attack.enable_client_isolation: false
+    attack.enable_printer_attacks: false
