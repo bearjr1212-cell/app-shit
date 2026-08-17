@@ -64,7 +64,7 @@ class TestPyWhatAnalyzerFallback(unittest.TestCase):
 
     def test_slack_token(self):
         """Detect Slack API token."""
-        text = "slack_token_placeholder"
+        text = "slack_token_placeholder_for_testing_only_not_real"
         results = self.analyzer.analyze(text)
         names = [r["name"] for r in results]
         self.assertIn("Slack Token", names)
@@ -78,7 +78,7 @@ class TestPyWhatAnalyzerFallback(unittest.TestCase):
 
     def test_stripe_secret_key(self):
         """Detect Stripe secret key."""
-        text = "stripe_key_placeholder"
+        text = "stripe_key_placeholder_for_testing_only"
         results = self.analyzer.analyze(text)
         names = [r["name"] for r in results]
         self.assertIn("Stripe Secret Key", names)
@@ -277,7 +277,7 @@ class TestPyWhatAnalyzerTraffic(unittest.TestCase):
                 {
                     "host": "api.example.com",
                     "method": "POST",
-                    "uri": "/v1/charges?key=stripe_key_placeholder",
+                    "uri": "/v1/charges?key=stripe_key_placeholder_for_test",
                     "user_agent": "Mozilla/5.0",
                     "cookie": "session=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
                     "authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
