@@ -270,8 +270,19 @@ class LinuxMonitorManager(MonitorManagerInterface):
 
     def __init__(self, interface: str):
         super().__init__(interface)
-        self._original_interface: str = interface
-        self._monitor_interface: str = f"{interface}mon"
+        # Determine the base interface name by stripping any 'mon' suffix(es).
+        # This prevents the "monmonmon" bug where repeatedly constructing
+        # LinuxMonitorManager on an already-renamed interface keeps appending 'mon'.
+        base = interface
+        while base.endswith("mon"):
+            base = base[:-3]
+        # If stripping produced an empty string (e.g., interface was literally "mon"),
+        # fall back to the original name.
+        if not base:
+            base = interface
+        self._original_interface: str = base
+        self._monitor_interface: str = f"{base}mon"
+        self._passed_interface: str = interface  # what was actually passed in
         self._original_state: Optional[Dict[str, str]] = None
 
     def _run_cmd(self, cmd: List[str], timeout: int = 10) -> Tuple[bool, str]:
@@ -320,8 +331,13 @@ class LinuxMonitorManager(MonitorManagerInterface):
             log.warning("iw command not available or failed")
             return False
 
-        # Check if interface exists
+        # Check if interface exists (try original base name, then passed name)
         success, output = self._run_cmd(["iw", "dev", self._original_interface, "info"])
+        if not success and self._passed_interface != self._original_interface:
+            success, output = self._run_cmd(["iw", "dev", self._passed_interface, "info"])
+            if success:
+                # The passed name exists but the base doesn't — adjust
+                self._original_interface = self._passed_interface
         if not success:
             log.warning(f"Interface '{self._original_interface}' not found")
             return False
@@ -346,6 +362,27 @@ class LinuxMonitorManager(MonitorManagerInterface):
             4. Rename interface to <iface>mon
             5. Bring monitor interface up
         """
+        # If the passed interface already ends with 'mon' and exists, check if
+        # it's already in monitor mode to avoid the monmonmon problem.
+        if self._passed_interface != self._original_interface:
+            success, output = self._run_cmd(
+                ["iw", "dev", self._passed_interface, "info"]
+            )
+            if success and "type monitor" in output:
+                log.info(f"{self._passed_interface} is already in monitor mode")
+                self._monitor_interface = self._passed_interface
+                self.interface = self._passed_interface
+                self.monitor_active = True
+                return True
+            # The passed name has 'mon' but the device doesn't exist or isn't
+            # in monitor mode — try the base name instead.
+            success_base, _ = self._run_cmd(
+                ["iw", "dev", self._original_interface, "info"]
+            )
+            if not success_base and success:
+                # The 'mon' name exists but base doesn't — use it as-is
+                self._original_interface = self._passed_interface
+
         self._save_original_state()
         self.original_mac = self.get_mac_address()
 
@@ -365,13 +402,15 @@ class LinuxMonitorManager(MonitorManagerInterface):
             return False
 
         # Rename interface to monitor name (e.g., wlan0 -> wlan0mon)
-        success, _ = self._run_cmd([
-            "ip", "link", "set", "dev", self._original_interface, "name", self._monitor_interface
-        ])
-        if not success:
-            # Renaming failed, keep original name
-            log.warning(f"Could not rename to {self._monitor_interface}, using {self._original_interface}")
-            self._monitor_interface = self._original_interface
+        if self._original_interface != self._monitor_interface:
+            success, _ = self._run_cmd([
+                "ip", "link", "set", "dev", self._original_interface, "name", self._monitor_interface
+            ])
+            if not success:
+                # Renaming failed, keep original name
+                log.warning(f"Could not rename to {self._monitor_interface}, using {self._original_interface}")
+                self._monitor_interface = self._original_interface
+        
 
         # Bring monitor interface up
         if not self._interface_up(self._monitor_interface):

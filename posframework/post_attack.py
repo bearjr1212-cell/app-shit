@@ -233,10 +233,7 @@ class PostAttackAnalyzer:
             ]
 
         # Add credential breakdown
-        self.db.cursor.execute(
-            'SELECT DISTINCT username FROM credentials WHERE username IS NOT NULL'
-        )
-        report["unique_users"] = [row[0] for row in self.db.cursor.fetchall()[:20]]
+        report["unique_users"] = self.db.get_unique_usernames()[:20]
 
         if output_file:
             with open(output_file, 'w') as f:
@@ -249,22 +246,7 @@ class PostAttackAnalyzer:
         """Export captured credentials to file."""
         os.makedirs("exports", exist_ok=True)
 
-        self.db.cursor.execute(
-            'SELECT id, client_ip, client_mac, username, password, url, timestamp '
-            'FROM credentials WHERE username IS NOT NULL OR password IS NOT NULL'
-        )
-
-        credentials = []
-        for row in self.db.cursor.fetchall():
-            credentials.append({
-                "id": row[0],
-                "client_ip": row[1],
-                "client_mac": row[2],
-                "username": row[3],
-                "password": row[4],
-                "url": row[5],
-                "timestamp": row[6]
-            })
+        credentials = self.db.get_credentials_list()
 
         with open(output_file, 'w') as f:
             json.dump(credentials, f, indent=2)
@@ -276,8 +258,7 @@ class PostAttackAnalyzer:
         """Export captured handshakes to directory."""
         os.makedirs(output_dir, exist_ok=True)
 
-        self.db.cursor.execute('SELECT DISTINCT bssid FROM eapol_frames')
-        bssids = [row[0] for row in self.db.cursor.fetchall()]
+        bssids = self.db.get_eapol_bssids()
 
         handshake_info = {
             "total_bssids": len(bssids),
@@ -285,12 +266,7 @@ class PostAttackAnalyzer:
         }
 
         for bssid in bssids:
-            self.db.cursor.execute(
-                'SELECT client_mac, frame_number, timestamp FROM eapol_frames '
-                'WHERE bssid = ? ORDER BY timestamp',
-                (bssid,)
-            )
-            frames = self.db.cursor.fetchall()
+            frames = self.db.get_eapol_frames_for_bssid(bssid)
 
             handshake_info["handshakes"].append({
                 "bssid": bssid,
