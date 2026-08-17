@@ -54,6 +54,7 @@ class NetworkSegmentationMapper:
         self.max_threads = max_threads
 
         self._running = False
+        self._persisted = False
         self._lock = threading.Lock()
 
         # Mapping results
@@ -220,6 +221,9 @@ class NetworkSegmentationMapper:
         # Detect ACL gaps
         self._detect_acl_gaps()
 
+        # Back-propagate ACL gaps to per-segment dicts
+        self._propagate_acl_gaps()
+
         # Persist results
         self._persist_results()
 
@@ -234,8 +238,19 @@ class NetworkSegmentationMapper:
 
     def _detect_inter_vlan_routing(self):
         """
-        Detect inter-VLAN routing by sending probes from one VLAN
-        to hosts in other VLANs. If response received, routing exists.
+        Detect inter-VLAN routing by sending VLAN-tagged probes from
+        the source VLAN to hosts in destination VLANs.
+
+        Probes are sent with Dot1Q tags matching the source VLAN ID.
+        This requires the attack interface to be connected to a trunk
+        port that carries the relevant VLANs. If a response is received,
+        it indicates that a Layer-3 route exists between the VLANs.
+
+        NOTE: Trunk port access is required for accurate results. If the
+        interface is on an access port (untagged), probes will travel via
+        the native VLAN regardless of the Dot1Q tag and results will only
+        reflect reachability from the attack position, not true inter-VLAN
+        routing. Findings are labeled accordingly.
         """
         vlan_ids = list(self._segments.keys())
 
@@ -259,9 +274,11 @@ class NetworkSegmentationMapper:
                 route_detected = False
                 gateway_ip = None
 
-                # Send ICMP probe
+                # Send VLAN-tagged ICMP probe from source VLAN
                 try:
                     probe = (
+                        Ether(dst="ff:ff:ff:ff:ff:ff") /
+                        Dot1Q(vlan=src_vlan) /
                         IP(dst=target_ip) /
                         ICMP()
                     )
@@ -275,13 +292,15 @@ class NetworkSegmentationMapper:
                 except Exception:
                     pass
 
-                # Try TCP SYN to a known open port
+                # Try VLAN-tagged TCP SYN to a known open port
                 if not route_detected:
                     for host_info in dst_hosts:
                         open_ports = host_info.get("open_ports", [])
                         if open_ports:
                             try:
                                 probe = (
+                                    Ether(dst="ff:ff:ff:ff:ff:ff") /
+                                    Dot1Q(vlan=src_vlan) /
                                     IP(dst=host_info["host"]) /
                                     TCP(dport=open_ports[0], flags="S")
                                 )
@@ -300,13 +319,13 @@ class NetworkSegmentationMapper:
                         "dst_vlan": dst_vlan,
                         "route_type": "routed",
                         "gateway_ip": gateway_ip,
-                        "bidirectional": 1,
+                        "bidirectional": 0,
                         "discovered_at": datetime.now().isoformat(
                             timespec="seconds"),
                     }
                     with self._lock:
                         self._routes.append(route)
-                    log.info(f"Route detected: VLAN {src_vlan} <-> "
+                    log.info(f"Route detected: VLAN {src_vlan} -> "
                              f"VLAN {dst_vlan} (gw={gateway_ip})")
 
     def _detect_acl_gaps(self):
@@ -580,9 +599,12 @@ class NetworkSegmentationMapper:
         if len(mgmt_overlap) >= 2:
             return "management"
 
-        # Payment VLAN: POS-specific ports
+        # Payment VLAN: requires at least one POS-specific port (4100, 9100, 20000)
+        # Generic HTTPS ports (443, 8443) alone do not trigger payment classification
+        pos_specific_ports = {4100, 9100, 20000}
         payment_overlap = all_ports & PAYMENT_PORTS
-        if len(payment_overlap) >= 2:
+        pos_specific_overlap = all_ports & pos_specific_ports
+        if len(payment_overlap) >= 2 and len(pos_specific_overlap) >= 1:
             return "payment"
 
         # Server VLAN: databases, web servers
@@ -614,10 +636,27 @@ class NetworkSegmentationMapper:
         """Parse CIDR to host IP list (delegates to net_utils)."""
         return parse_cidr(cidr)
 
+    def _propagate_acl_gaps(self):
+        """
+        Back-propagate detected ACL gaps to per-segment dicts so that
+        _persist_results serializes them correctly into the database.
+        """
+        with self._lock:
+            for gap in self._acl_gaps:
+                dst_vlan = gap.get("dst_vlan")
+                if dst_vlan in self._segments:
+                    self._segments[dst_vlan]["acl_gaps"].append(gap)
+
     def _persist_results(self):
-        """Persist mapping results to database."""
+        """Persist mapping results to database. Guarded to run only once."""
         if not self.db:
             return
+
+        # Prevent double-persist (called from both map_all and stop)
+        with self._lock:
+            if self._persisted:
+                return
+            self._persisted = True
 
         # Store segments
         for vlan_id, seg in self._segments.items():
