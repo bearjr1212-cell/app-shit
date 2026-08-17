@@ -1,0 +1,23 @@
+{
+  "project_type": "Python WiFi reconnaissance and attack framework using Scapy",
+  "language": "Python 3",
+  "build_system": "None (no setup.py/pyproject.toml - direct module execution)",
+  "test_framework": "None - no automated tests exist",
+  "build_command": "python -c 'import posframework'",
+  "test_command": "python -c 'import posframework; print(\"Import OK\")'",
+  "verification_instructions": "Run python import check to verify no syntax errors. Cannot run actual tests as framework requires root and WiFi hardware.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "pip install scapy (already available in environment)",
+  "environment_constraints": "INTEGRATIONS_ONLY network - cannot install packages. Use AST/import validation only. Framework requires root and wireless hardware to actually run.",
+  "contribution_requirements": "Branch fix/complete-audit-fixes, push to update existing PR #1",
+  "key_patterns": "All modules follow class-based pattern with start()/stop() lifecycle, use threading for async operations, use scapy for packet crafting, use subprocess for system tools (hostapd/dnsmasq/iptables/iw). Logging via posframework.config.log. Platform detection via IS_WINDOWS/IS_LINUX.",
+  "relevant_files": [
+    "posframework/ssl_strip.py",
+    "posframework/mitm.py",
+    "posframework/network_disruption.py",
+    "posframework/cred_tester.py",
+    "posframework/handshake.py",
+    "posframework/config.py"
+  ],
+  "directory_structure": "posframework/ - single flat directory with all .py modules. No tests directory. No build files."
+}
