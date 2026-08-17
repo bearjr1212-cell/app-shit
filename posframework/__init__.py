@@ -95,71 +95,330 @@ Subpackages (new capabilities):
     john_integration - John the Ripper CLI wrapper for password cracking
 """
 
-__version__ = "2.1.0"
+__version__ = "3.0.0"
 
 from .config import DB_NAME, CHANNELS_24GHZ, CHANNELS_5GHZ, log
 from .database import POSDatabase
-from .recon import ReconEngine
-from .deauth import DeauthEngine
-from .beacons import KnownBeaconsEngine
-from .rogueap import RogueAPEngine
-from .orchestrator import AttackOrchestrator
-from .mitm import MITMEngine
-from .ssl_strip import SSLStripper
-from .dns_spoof import DNSSpoofEngine
-from .cred_harvester import CredentialHarvester
-from .network_disruption import NetworkDisruption, DeauthStorm
-from .post_attack import PostAttackAnalyzer
-from .monitor_mode import (
-    setup_monitor_mode, teardown_monitor_mode,
-    enhanced_setup_monitor_mode,
-    WindowsMonitorManager, LinuxMonitorManager,
-    ChipMonitorManager, WindowsChipMonitorManager,
-    check_npcap_monitor_support, get_available_interfaces,
-    get_interface_mac, MonitorModeError, MonitorManagerInterface
-)
-from .chip_detector import ChipDetector, ChipInfo, MonitorMethodSelector
-from .monitor_manager import EnhancedMonitorManager
-from .tshark_decrypt import TsharkDecryptionEngine, LiveDecryptionSession
-from .pywhat_analyzer import PyWhatAnalyzer, PyWhatCallback
-from .ap_clone import APCloneEngine
-from .krack import KRACKEngine
-from .dos_wifi import WiFiDoSEngine, DoSMode
-from .client_isolation import ClientIsolationEngine
-from .printer_recon import PrinterRecon
-from .ipp_scanner import IPPScanner
-from .print_interceptor import PrintJobInterceptor
-from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
-from .plugin_system import BasePlugin, PluginManager, PluginMetadata, PluginState, PluginType
-from .event_bus import EventBus, EventType, Event, get_event_bus
-from .capability_manager import CapabilityManager, HardwareRequirement, MockCapabilityManager
-from .models import AccessPoint, Client, Handshake, Credential, Target, EncryptionType
-from .config_loader import ConfigLoader
-from .target_scorer import TargetScorer, ScoredTarget
-from .attack_selector import AttackSelector, AttackChain, AttackStep
-from .attack_flow import ReconAttackFlow, FlowPhase
-from .pmkid import PMKIDCapture
-from .multi_ap_capture import MultiAPCapture
-from .https_intercept import HTTPSInterceptor
-from .session_hijacker import SessionHijacker
-from .ntlm_capture import NTLMCapture
-from .kerberos_capture import KerberosCapture
-from .ldap_capture import LDAPCapture
-from .cloud_cred_detector import CloudCredentialDetector
-from .cert_auth_detector import CertAuthDetector
-from .cred_sprayer import CredentialSprayer
-from .cred_enrichment import CredentialEnrichment
-from .auto_pivot import AutoPivot
-from .browser_cred_extract import BrowserCredentialExtractor
-from .hashcat_integration import HashcatIntegration
-from .cred_correlation import CredentialCorrelationEngine
-from .client_profiler import ClientProfiler
-from .vlan_scanner import VLANScanner
-from .network_mapper import NetworkSegmentationMapper
-from .john_integration import JohnManager, JohnMode, JohnStatus
+
+# All module imports are guarded with try/except since they depend on
+# optional external libraries (scapy, bleak, pyrtlsdr, pywhat, etc.)
+
+try:
+    from .recon import ReconEngine
+except ImportError:
+    ReconEngine = None
+
+try:
+    from .deauth import DeauthEngine
+except ImportError:
+    DeauthEngine = None
+
+try:
+    from .beacons import KnownBeaconsEngine
+except ImportError:
+    KnownBeaconsEngine = None
+
+try:
+    from .rogueap import RogueAPEngine
+except ImportError:
+    RogueAPEngine = None
+
+try:
+    from .orchestrator import AttackOrchestrator
+except ImportError:
+    AttackOrchestrator = None
+
+try:
+    from .mitm import MITMEngine
+except ImportError:
+    MITMEngine = None
+
+try:
+    from .ssl_strip import SSLStripper
+except ImportError:
+    SSLStripper = None
+
+try:
+    from .dns_spoof import DNSSpoofEngine
+except ImportError:
+    DNSSpoofEngine = None
+
+try:
+    from .cred_harvester import CredentialHarvester
+except ImportError:
+    CredentialHarvester = None
+
+try:
+    from .network_disruption import NetworkDisruption, DeauthStorm
+except ImportError:
+    NetworkDisruption = None
+    DeauthStorm = None
+
+try:
+    from .post_attack import PostAttackAnalyzer
+except ImportError:
+    PostAttackAnalyzer = None
+
+try:
+    from .monitor_mode import (
+        setup_monitor_mode, teardown_monitor_mode,
+        enhanced_setup_monitor_mode,
+        WindowsMonitorManager, LinuxMonitorManager,
+        ChipMonitorManager, WindowsChipMonitorManager,
+        check_npcap_monitor_support, get_available_interfaces,
+        get_interface_mac, MonitorModeError, MonitorManagerInterface
+    )
+except ImportError:
+    setup_monitor_mode = None
+    teardown_monitor_mode = None
+    enhanced_setup_monitor_mode = None
+    WindowsMonitorManager = None
+    LinuxMonitorManager = None
+    ChipMonitorManager = None
+    WindowsChipMonitorManager = None
+    check_npcap_monitor_support = None
+    get_available_interfaces = None
+    get_interface_mac = None
+    MonitorModeError = None
+    MonitorManagerInterface = None
+
+try:
+    from .chip_detector import ChipDetector, ChipInfo, MonitorMethodSelector
+except ImportError:
+    ChipDetector = None
+    ChipInfo = None
+    MonitorMethodSelector = None
+
+try:
+    from .monitor_manager import EnhancedMonitorManager
+except ImportError:
+    EnhancedMonitorManager = None
+
+try:
+    from .tshark_decrypt import TsharkDecryptionEngine, LiveDecryptionSession
+except ImportError:
+    TsharkDecryptionEngine = None
+    LiveDecryptionSession = None
+
+try:
+    from .pywhat_analyzer import PyWhatAnalyzer, PyWhatCallback
+except ImportError:
+    PyWhatAnalyzer = None
+    PyWhatCallback = None
+
+try:
+    from .ap_clone import APCloneEngine
+except ImportError:
+    APCloneEngine = None
+
+try:
+    from .krack import KRACKEngine
+except ImportError:
+    KRACKEngine = None
+
+try:
+    from .dos_wifi import WiFiDoSEngine, DoSMode
+except ImportError:
+    WiFiDoSEngine = None
+    DoSMode = None
+
+try:
+    from .client_isolation import ClientIsolationEngine
+except ImportError:
+    ClientIsolationEngine = None
+
+try:
+    from .printer_recon import PrinterRecon
+except ImportError:
+    PrinterRecon = None
+
+try:
+    from .ipp_scanner import IPPScanner
+except ImportError:
+    IPPScanner = None
+
+try:
+    from .print_interceptor import PrintJobInterceptor
+except ImportError:
+    PrintJobInterceptor = None
+
+try:
+    from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
+except ImportError:
+    PrinterCredHarvester = None
+
+try:
+    from .plugin_system import BasePlugin, PluginManager, PluginMetadata, PluginState, PluginType
+except ImportError:
+    BasePlugin = None
+    PluginManager = None
+    PluginMetadata = None
+    PluginState = None
+    PluginType = None
+
+try:
+    from .event_bus import EventBus, EventType, Event, get_event_bus
+except ImportError:
+    EventBus = None
+    EventType = None
+    Event = None
+    get_event_bus = None
+
+try:
+    from .capability_manager import CapabilityManager, HardwareRequirement, MockCapabilityManager
+except ImportError:
+    CapabilityManager = None
+    HardwareRequirement = None
+    MockCapabilityManager = None
+
+try:
+    from .models import AccessPoint, Client, Handshake, Credential, Target, EncryptionType
+except ImportError:
+    AccessPoint = None
+    Client = None
+    Handshake = None
+    Credential = None
+    Target = None
+    EncryptionType = None
+
+try:
+    from .config_loader import ConfigLoader
+except ImportError:
+    ConfigLoader = None
+
+try:
+    from .target_scorer import TargetScorer, ScoredTarget
+except ImportError:
+    TargetScorer = None
+    ScoredTarget = None
+
+try:
+    from .attack_selector import AttackSelector, AttackChain, AttackStep
+except ImportError:
+    AttackSelector = None
+    AttackChain = None
+    AttackStep = None
+
+try:
+    from .attack_flow import ReconAttackFlow, FlowPhase
+except ImportError:
+    ReconAttackFlow = None
+    FlowPhase = None
+
+try:
+    from .pmkid import PMKIDCapture
+except ImportError:
+    PMKIDCapture = None
+
+try:
+    from .multi_ap_capture import MultiAPCapture
+except ImportError:
+    MultiAPCapture = None
+
+try:
+    from .https_intercept import HTTPSInterceptor
+except ImportError:
+    HTTPSInterceptor = None
+
+try:
+    from .session_hijacker import SessionHijacker
+except ImportError:
+    SessionHijacker = None
+
+try:
+    from .ntlm_capture import NTLMCapture
+except ImportError:
+    NTLMCapture = None
+
+try:
+    from .kerberos_capture import KerberosCapture
+except ImportError:
+    KerberosCapture = None
+
+try:
+    from .ldap_capture import LDAPCapture
+except ImportError:
+    LDAPCapture = None
+
+try:
+    from .cloud_cred_detector import CloudCredentialDetector
+except ImportError:
+    CloudCredentialDetector = None
+
+try:
+    from .cert_auth_detector import CertAuthDetector
+except ImportError:
+    CertAuthDetector = None
+
+try:
+    from .cred_sprayer import CredentialSprayer
+except ImportError:
+    CredentialSprayer = None
+
+try:
+    from .cred_enrichment import CredentialEnrichment
+except ImportError:
+    CredentialEnrichment = None
+
+try:
+    from .auto_pivot import AutoPivot
+except ImportError:
+    AutoPivot = None
+
+try:
+    from .browser_cred_extract import BrowserCredentialExtractor
+except ImportError:
+    BrowserCredentialExtractor = None
+
+try:
+    from .hashcat_integration import HashcatIntegration
+except ImportError:
+    HashcatIntegration = None
+
+try:
+    from .cred_correlation import CredentialCorrelationEngine
+except ImportError:
+    CredentialCorrelationEngine = None
+
+try:
+    from .client_profiler import ClientProfiler
+except ImportError:
+    ClientProfiler = None
+
+try:
+    from .vlan_scanner import VLANScanner
+except ImportError:
+    VLANScanner = None
+
+try:
+    from .network_mapper import NetworkSegmentationMapper
+except ImportError:
+    NetworkSegmentationMapper = None
+
+try:
+    from .john_integration import JohnManager, JohnMode, JohnStatus
+except ImportError:
+    JohnManager = None
+    JohnMode = None
+    JohnStatus = None
 
 # Subpackage re-exports for convenience
-from . import ble
-from . import sdr
-from . import gps
-from . import wpa3
+try:
+    from . import ble
+except ImportError:
+    ble = None
+
+try:
+    from . import sdr
+except ImportError:
+    sdr = None
+
+try:
+    from . import gps
+except ImportError:
+    gps = None
+
+try:
+    from . import wpa3
+except ImportError:
+    wpa3 = None

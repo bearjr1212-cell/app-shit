@@ -1,15 +1,23 @@
 """
-POSFramework CLI Terminal UI
------------------------------
-Curses-based terminal interface for POSFramework with:
-  - Main menu with options for each mode (Recon, Attack, MITM, Credentials, Printers, Settings)
-  - Real-time updating display showing APs, clients, credentials as discovered
-  - Status bar at the bottom with live stats
-  - Color-coded output (green for success, red for errors, yellow for warnings)
-  - Keyboard navigation (arrow keys, enter to select, q to quit)
-  - Tabbed view within the terminal
+POSFramework Advanced Terminal UI v3.0.0
+----------------------------------------
+Comprehensive ncurses-based terminal interface for POSFramework.
+Wires in ALL 90+ modules across 9 organized tabs with:
+  - Advanced target selection with sortable AP/client tables
+  - Context-sensitive attack menus based on selected target
+  - Passive credential/secret harvesting with live tshark decryption + pyWhat
+  - Every module accessible from the UI organized into logical categories
+  - Real-time status for all running engines
+  - AutoPwn autonomous mode with full state machine integration
 
-Uses ONLY Python standard library (curses module). No external dependencies.
+Uses ONLY Python standard library (curses module) for the UI.
+All external modules are imported with graceful try/except fallbacks.
+
+Tabs: [1:Targets] [2:WiFi Attacks] [3:Credential Attacks] [4:MITM]
+      [5:Network] [6:BLE/SDR] [7:Harvester] [8:Cracking] [9:Settings]
+
+Keys: q=quit, Tab/1-9=tabs, arrows=nav, Enter=action, Space=toggle,
+      s=sort, a=autopwn, f=filter, /=search, e=export, r=refresh
 """
 
 import os
@@ -18,46 +26,371 @@ import time
 import curses
 import threading
 import logging
+import asyncio
+import json
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
+# ---- Core imports (always available) ----
 from .config import (
     DB_NAME, CHANNELS_24GHZ, CHANNELS_5GHZ, IS_WINDOWS, IS_LINUX,
     DEFAULT_MONITOR_IFACE, DEFAULT_AP_IFACE, log,
 )
 from .database import POSDatabase
 
-# Attempt to import scapy-dependent engines
+# ---- Scapy-dependent engines ----
 SCAPY_AVAILABLE = True
 try:
     from .recon import ReconEngine
-    from .orchestrator import AttackOrchestrator
-    from .deauth import DeauthEngine
-    from .beacons import KnownBeaconsEngine
-    from .rogueap import RogueAPEngine
-    from .karma import KARMAEngine
-    from .mitm import MITMEngine
-    from .ssl_strip import SSLStripper
-    from .dns_spoof import DNSSpoofEngine
-    from .cred_harvester import CredentialHarvester
-    from .handshake import HandshakeCapture
-    from .signal_targeting import SignalTargeting
-    from .network_disruption import NetworkDisruption
-    from .post_attack import PostAttackAnalyzer
-    from .ap_clone import APCloneEngine
-    from .krack import KRACKEngine
-    from .dos_wifi import WiFiDoSEngine
-    from .client_isolation import ClientIsolationEngine
-    from .printer_recon import PrinterRecon
-    from .ipp_scanner import IPPScanner
-    from .print_interceptor import PrintJobInterceptor
-    from .printer_creds import PrinterCredentialHarvester
-except ImportError as e:
+except ImportError:
     SCAPY_AVAILABLE = False
-    _SCAPY_IMPORT_ERROR = str(e)
+    ReconEngine = None
+
+try:
+    from .orchestrator import AttackOrchestrator
+except ImportError:
+    AttackOrchestrator = None
+
+try:
+    from .deauth import DeauthEngine
+except ImportError:
+    DeauthEngine = None
+
+try:
+    from .beacons import KnownBeaconsEngine
+except ImportError:
+    KnownBeaconsEngine = None
+
+try:
+    from .karma import KARMAEngine
+except ImportError:
+    KARMAEngine = None
+
+try:
+    from .rogueap import RogueAPEngine
+except ImportError:
+    RogueAPEngine = None
+
+try:
+    from .ap_clone import APCloneEngine
+except ImportError:
+    APCloneEngine = None
+
+try:
+    from .krack import KRACKEngine
+except ImportError:
+    KRACKEngine = None
+
+try:
+    from .dos_wifi import WiFiDoSEngine
+except ImportError:
+    WiFiDoSEngine = None
+
+try:
+    from .client_isolation import ClientIsolationEngine
+except ImportError:
+    ClientIsolationEngine = None
+
+try:
+    from .network_disruption import NetworkDisruption
+except ImportError:
+    NetworkDisruption = None
+
+try:
+    from .handshake import HandshakeCapture
+except ImportError:
+    HandshakeCapture = None
+
+try:
+    from .pmkid import PMKIDCapture
+except ImportError:
+    PMKIDCapture = None
+
+try:
+    from .multi_ap_capture import MultiAPCapture
+except ImportError:
+    MultiAPCapture = None
+
+# ---- MITM modules ----
+try:
+    from .mitm import MITMEngine
+except ImportError:
+    MITMEngine = None
+
+try:
+    from .ssl_strip import SSLStripper
+except ImportError:
+    SSLStripper = None
+
+try:
+    from .dns_spoof import DNSSpoofEngine
+except ImportError:
+    DNSSpoofEngine = None
+
+# ---- Credential modules ----
+try:
+    from .cred_harvester import CredentialHarvester
+except ImportError:
+    CredentialHarvester = None
+
+try:
+    from .https_intercept import HTTPSInterceptor
+except ImportError:
+    HTTPSInterceptor = None
+
+try:
+    from .session_hijacker import SessionHijacker
+except ImportError:
+    SessionHijacker = None
+
+try:
+    from .ntlm_capture import NTLMCapture
+except ImportError:
+    NTLMCapture = None
+
+try:
+    from .kerberos_capture import KerberosCapture
+except ImportError:
+    KerberosCapture = None
+
+try:
+    from .ldap_capture import LDAPCapture
+except ImportError:
+    LDAPCapture = None
+
+try:
+    from .cloud_cred_detector import CloudCredDetector
+except ImportError:
+    CloudCredDetector = None
+
+try:
+    from .cert_auth_detector import CertAuthDetector
+except ImportError:
+    CertAuthDetector = None
+
+try:
+    from .browser_cred_extract import BrowserCredExtract
+except ImportError:
+    BrowserCredExtract = None
+
+try:
+    from .cred_sprayer import CredSprayer
+except ImportError:
+    CredSprayer = None
+
+try:
+    from .cred_enrichment import CredEnrichment
+except ImportError:
+    CredEnrichment = None
+
+try:
+    from .cred_correlation import CredCorrelation
+except ImportError:
+    CredCorrelation = None
+
+try:
+    from .client_profiler import ClientProfiler
+except ImportError:
+    ClientProfiler = None
+
+# ---- Network modules ----
+try:
+    from .vlan_scanner import VLANScanner
+except ImportError:
+    VLANScanner = None
+
+try:
+    from .network_mapper import NetworkSegmentationMapper
+except ImportError:
+    NetworkSegmentationMapper = None
+
+try:
+    from .auto_pivot import AutoPivot
+except ImportError:
+    AutoPivot = None
+
+try:
+    from .printer_recon import PrinterRecon
+except ImportError:
+    PrinterRecon = None
+
+try:
+    from .ipp_scanner import IPPScanner
+except ImportError:
+    IPPScanner = None
+
+try:
+    from .print_interceptor import PrintJobInterceptor
+except ImportError:
+    PrintJobInterceptor = None
+
+try:
+    from .printer_creds import PrinterCredentialHarvester
+except ImportError:
+    PrinterCredentialHarvester = None
+
+# ---- Analysis modules ----
+try:
+    from .signal_targeting import SignalTargeting
+except ImportError:
+    SignalTargeting = None
+
+try:
+    from .target_scorer import TargetScorer
+except ImportError:
+    TargetScorer = None
+
+try:
+    from .attack_selector import AttackSelector
+except ImportError:
+    AttackSelector = None
+
+try:
+    from .post_attack import PostAttackAnalyzer
+except ImportError:
+    PostAttackAnalyzer = None
+
+# ---- Cracking modules ----
+try:
+    from .hashcat_integration import HashcatIntegration
+except ImportError:
+    HashcatIntegration = None
+
+try:
+    from .john_integration import JohnIntegration
+except ImportError:
+    JohnIntegration = None
+
+# ---- Harvester/Decryption modules ----
+try:
+    from .pywhat_analyzer import PyWhatAnalyzer, PyWhatCallback
+except ImportError:
+    PyWhatAnalyzer = None
+    PyWhatCallback = None
+
+try:
+    from .tshark_decrypt import LiveDecryptionSession, TsharkDecryptionEngine
+except ImportError:
+    LiveDecryptionSession = None
+    TsharkDecryptionEngine = None
+
+# ---- WPA3 modules ----
+try:
+    from .wpa3.wpa3_attack import WPA3Attack
+except ImportError:
+    WPA3Attack = None
+
+try:
+    from .wpa3.wpa3_detector import WPA3Detector
+except ImportError:
+    WPA3Detector = None
+
+# ---- BLE modules ----
+try:
+    from .ble.scanner import BLEScanner
+except ImportError:
+    BLEScanner = None
+
+try:
+    from .ble.beacon_spoofer import BeaconSpoofer
+except ImportError:
+    BeaconSpoofer = None
+
+try:
+    from .ble.gatt_explorer import GATTExplorer
+except ImportError:
+    GATTExplorer = None
+
+try:
+    from .ble.hid_injector import HIDInjector
+except ImportError:
+    HIDInjector = None
+
+# ---- SDR modules ----
+try:
+    from .sdr.sdr_manager import SDRManager
+except ImportError:
+    SDRManager = None
+
+try:
+    from .sdr.spectrum_analyzer import SpectrumAnalyzer
+except ImportError:
+    SpectrumAnalyzer = None
+
+try:
+    from .sdr.signal_decoder import SignalDecoder
+except ImportError:
+    SignalDecoder = None
+
+# ---- GPS modules ----
+try:
+    from .gps.gpsd_client import GPSDClient
+except ImportError:
+    GPSDClient = None
+
+try:
+    from .gps.distance import Distance
+except ImportError:
+    Distance = None
+
+# ---- Infrastructure modules ----
+try:
+    from .event_bus import EventBus, EventType
+except ImportError:
+    EventBus = None
+    EventType = None
+
+try:
+    from .autopwn_engine import AutoPwnEngine, AutoPwnConfig, AutoPwnMode, AutoPwnState
+except ImportError:
+    AutoPwnEngine = None
+    AutoPwnConfig = None
+    AutoPwnMode = None
+    AutoPwnState = None
+
+try:
+    from .session_manager import SessionManager
+except ImportError:
+    SessionManager = None
+
+try:
+    from .plugin_system import PluginManager
+except ImportError:
+    PluginManager = None
+
+try:
+    from .capability_manager import CapabilityManager
+except ImportError:
+    CapabilityManager = None
+
+try:
+    from .radio_manager import RadioManager
+except ImportError:
+    RadioManager = None
+
+try:
+    from .monitor_manager import MonitorManager
+except ImportError:
+    MonitorManager = None
+
+try:
+    from .chip_detector import ChipDetector
+except ImportError:
+    ChipDetector = None
+
+try:
+    from .config_loader import ConfigLoader
+except ImportError:
+    ConfigLoader = None
+
+try:
+    from .net_utils import NetUtils
+except ImportError:
+    NetUtils = None
 
 
 # ---- Version ----
-VERSION = "2.2.0"
+VERSION = "3.0.0"
 
 # ---- Color Pair IDs ----
 COLOR_NORMAL = 0
@@ -70,6 +403,10 @@ COLOR_SELECTED = 6
 COLOR_TAB_ACTIVE = 7
 COLOR_TAB_INACTIVE = 8
 COLOR_ACCENT = 9
+COLOR_CYAN_BG = 10
+COLOR_HIGHLIGHT = 11
+COLOR_RUNNING = 12
+COLOR_STOPPED = 13
 
 
 def _init_colors():
@@ -85,6 +422,10 @@ def _init_colors():
     curses.init_pair(COLOR_TAB_ACTIVE, curses.COLOR_BLACK, curses.COLOR_GREEN)
     curses.init_pair(COLOR_TAB_INACTIVE, curses.COLOR_WHITE, curses.COLOR_BLACK)
     curses.init_pair(COLOR_ACCENT, curses.COLOR_MAGENTA, -1)
+    curses.init_pair(COLOR_CYAN_BG, curses.COLOR_WHITE, curses.COLOR_CYAN)
+    curses.init_pair(COLOR_HIGHLIGHT, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+    curses.init_pair(COLOR_RUNNING, curses.COLOR_GREEN, -1)
+    curses.init_pair(COLOR_STOPPED, curses.COLOR_RED, -1)
 
 
 # ---- Log Capture Handler ----
@@ -94,7 +435,7 @@ class CursesLogHandler(logging.Handler):
 
     def __init__(self, max_lines=500):
         super().__init__()
-        self.records = []
+        self.records: List[Tuple[int, str]] = []
         self.max_lines = max_lines
         self._lock = threading.Lock()
 
@@ -116,36 +457,225 @@ class CursesLogHandler(logging.Handler):
 
 # ---- Tab definitions ----
 
-TABS = ["Recon", "Attack", "MITM", "Credentials", "Printers", "Settings"]
+TABS = [
+    "Targets", "WiFi Attacks", "Cred Attacks", "MITM",
+    "Network", "BLE/SDR", "Harvester", "Cracking", "Settings"
+]
+
+# ---- Sort modes for targets tab ----
+SORT_MODES = ["rssi", "security", "pos", "channel", "clients", "ssid"]
+
+
+# ---- Engine status tracking ----
+
+class EngineStatus:
+    """Track status of a module engine."""
+    IDLE = "IDLE"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+
+    def __init__(self, name: str, engine_class=None):
+        self.name = name
+        self.engine_class = engine_class
+        self.engine = None
+        self.status = self.IDLE
+        self.error_msg = ""
+        self.start_time: Optional[float] = None
+
+    @property
+    def available(self) -> bool:
+        return self.engine_class is not None
+
+    @property
+    def is_running(self) -> bool:
+        return self.status == self.RUNNING
+
+    def start(self, *args, **kwargs):
+        """Start the engine."""
+        if not self.available:
+            self.status = self.FAILED
+            self.error_msg = "Module not available"
+            return False
+        try:
+            if self.engine is None:
+                self.engine = self.engine_class(*args, **kwargs)
+            self.engine.start()
+            self.status = self.RUNNING
+            self.start_time = time.time()
+            return True
+        except Exception as e:
+            self.status = self.FAILED
+            self.error_msg = str(e)
+            return False
+
+    def stop(self):
+        """Stop the engine."""
+        if self.engine and self.status == self.RUNNING:
+            try:
+                self.engine.stop()
+                self.status = self.IDLE
+            except Exception as e:
+                self.status = self.FAILED
+                self.error_msg = str(e)
+        else:
+            self.status = self.IDLE
+
+    def toggle(self, *args, **kwargs):
+        """Toggle engine start/stop."""
+        if self.is_running:
+            self.stop()
+        else:
+            self.start(*args, **kwargs)
 
 
 # ---- Main Terminal UI Class ----
 
 class TerminalUI:
-    """Curses-based terminal UI for POSFramework."""
+    """Advanced ncurses terminal UI for POSFramework v3.0.
+
+    Comprehensive 9-tab interface wiring in all 90+ modules with:
+    - Advanced target selection with sortable AP/client tables
+    - Context-sensitive attack menus
+    - Passive credential/secret harvesting
+    - AutoPwn autonomous mode
+    """
 
     def __init__(self):
         self.db = POSDatabase()
         self.running = True
         self.active_tab = 0
         self.scroll_offset = 0
+        self.menu_selected = 0
+        self.stdscr = None
+
+        # Log handler
         self.log_handler = CursesLogHandler()
         self.log_handler.setFormatter(
             logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S")
         )
         log.addHandler(self.log_handler)
 
-        # Engine state
+        # Target selection
+        self.selected_target_idx = 0
+        self.selected_client_idx = 0
+        self.selected_target: Optional[Dict] = None
+        self.selected_client: Optional[Dict] = None
+        self.target_view = "ap"  # "ap" or "client"
+        self.sort_mode = 0  # index into SORT_MODES
+        self.filter_text = ""
+        self.show_popup = False
+        self.popup_items: List[str] = []
+        self.popup_selected = 0
+        self.popup_title = ""
+
+        # Core engines
         self.recon_engine = None
         self.recon_running = False
-        self.attack_orchestrator = None
-        self.attack_running = False
-        self.mitm_engine = None
-        self.mitm_running = False
-        self.cred_harvester = None
-        self.cred_running = False
-        self.printer_scanner = None
-        self.printer_running = False
+        self.autopwn_engine = None
+        self.autopwn_running = False
+        self.autopwn_state = "IDLE"
+        self.event_bus = None
+
+        # Client profiler
+        self.client_profiler = None
+        if ClientProfiler is not None:
+            try:
+                self.client_profiler = ClientProfiler(db=self.db)
+            except Exception:
+                pass
+
+        # WiFi attack engines
+        self.wifi_attacks = {
+            "deauth": EngineStatus("Deauthentication", DeauthEngine),
+            "beacons": EngineStatus("Beacon Flood", KnownBeaconsEngine),
+            "karma": EngineStatus("KARMA AP", KARMAEngine),
+            "rogueap": EngineStatus("Rogue AP", RogueAPEngine),
+            "ap_clone": EngineStatus("Evil Twin/AP Clone", APCloneEngine),
+            "krack": EngineStatus("KRACK Attack", KRACKEngine),
+            "dos_cts": EngineStatus("DoS: CTS Flood", WiFiDoSEngine),
+            "dos_beacon": EngineStatus("DoS: Beacon Exhaust", WiFiDoSEngine),
+            "dos_qos": EngineStatus("DoS: QoS Null", WiFiDoSEngine),
+            "dos_frag": EngineStatus("DoS: Fragment", WiFiDoSEngine),
+            "client_iso": EngineStatus("Client Isolation", ClientIsolationEngine),
+            "net_disrupt": EngineStatus("Network Disruption", NetworkDisruption),
+            "wpa3_attack": EngineStatus("WPA3 Downgrade", WPA3Attack),
+            "wpa3_detect": EngineStatus("WPA3 Detector", WPA3Detector),
+            "handshake": EngineStatus("Handshake Capture", HandshakeCapture),
+            "pmkid": EngineStatus("PMKID Capture", PMKIDCapture),
+            "multi_cap": EngineStatus("Multi-AP Capture", MultiAPCapture),
+        }
+
+        # Credential attack engines
+        self.cred_attacks = {
+            "harvester": EngineStatus("HTTP/FTP/IMAP Harvester", CredentialHarvester),
+            "https": EngineStatus("HTTPS Interceptor", HTTPSInterceptor),
+            "session": EngineStatus("Session Hijacker", SessionHijacker),
+            "ntlm": EngineStatus("NTLM Capture", NTLMCapture),
+            "kerberos": EngineStatus("Kerberos Capture", KerberosCapture),
+            "ldap": EngineStatus("LDAP Capture", LDAPCapture),
+            "cloud": EngineStatus("Cloud Credential Detect", CloudCredDetector),
+            "cert_auth": EngineStatus("Certificate Auth Detect", CertAuthDetector),
+            "browser": EngineStatus("Browser Cred Extract", BrowserCredExtract),
+            "sprayer": EngineStatus("Credential Sprayer", CredSprayer),
+            "enrichment": EngineStatus("Credential Enrichment", CredEnrichment),
+            "correlation": EngineStatus("Credential Correlation", CredCorrelation),
+        }
+
+        # MITM engines
+        self.mitm_attacks = {
+            "arp": EngineStatus("ARP Poison (MITM)", MITMEngine),
+            "ssl_strip": EngineStatus("SSL Strip", SSLStripper),
+            "dns_spoof": EngineStatus("DNS Spoof", DNSSpoofEngine),
+        }
+
+        # Network engines
+        self.network_modules = {
+            "vlan": EngineStatus("VLAN Scanner", VLANScanner),
+            "mapper": EngineStatus("Network Mapper", NetworkSegmentationMapper),
+            "pivot": EngineStatus("Auto-Pivot", AutoPivot),
+            "printer_recon": EngineStatus("Printer Recon", PrinterRecon),
+            "ipp": EngineStatus("IPP Scanner", IPPScanner),
+            "print_intercept": EngineStatus("Print Interceptor", PrintJobInterceptor),
+            "printer_creds": EngineStatus("Printer Credentials", PrinterCredentialHarvester),
+        }
+
+        # BLE/SDR engines
+        self.ble_sdr_modules = {
+            "ble_scan": EngineStatus("BLE Scanner", BLEScanner),
+            "ble_beacon": EngineStatus("Beacon Spoofer", BeaconSpoofer),
+            "ble_gatt": EngineStatus("GATT Explorer", GATTExplorer),
+            "ble_hid": EngineStatus("HID Injector", HIDInjector),
+            "sdr_mgr": EngineStatus("SDR Manager", SDRManager),
+            "spectrum": EngineStatus("Spectrum Analyzer", SpectrumAnalyzer),
+            "decoder": EngineStatus("Signal Decoder", SignalDecoder),
+            "gps": EngineStatus("GPS Client", GPSDClient),
+        }
+
+        # Harvester state
+        self.harvester_session: Optional[Any] = None
+        self.harvester_running = False
+        self.pywhat_analyzer: Optional[Any] = None
+        self.pywhat_callback: Optional[Any] = None
+        self.harvester_psk = ""
+        self.harvester_ssid = ""
+        self.harvester_wep_key = ""
+        self.harvester_findings: List[Dict] = []
+
+        if PyWhatAnalyzer is not None:
+            try:
+                self.pywhat_analyzer = PyWhatAnalyzer()
+            except Exception:
+                pass
+
+        # Cracking state
+        self.hashcat_engine = None
+        self.john_engine = None
+        self.cracking_active = False
+        self.cracking_progress = 0.0
+        self.cracking_mode = "dictionary"  # dictionary, brute-force, rules
+        self.wordlist_path = "/usr/share/wordlists/rockyou.txt"
+        self.captured_handshakes: List[Dict] = []
 
         # Settings
         self.monitor_iface = DEFAULT_MONITOR_IFACE
@@ -153,41 +683,80 @@ class TerminalUI:
         self.use_5ghz = False
         self.channels = CHANNELS_24GHZ
         self.verbose_mode = False
-        self.signal_targeting = False
-
-        # Attack configuration
-        self.attack_target_bssid = ""
+        self.signal_targeting_enabled = False
         self.rssi_limit = -80
         self.recon_duration = 30
         self.dos_mode = "cts_flood"
-        self.attack_modules = {
-            "deauth": True,
-            "beacons": True,
-            "karma": True,
-            "rogue_ap": False,
-            "ap_clone": False,
-            "krack": False,
-            "dos": False,
-            "client_isolation": False,
-            "printer_attacks": False,
-        }
 
-        # MITM configuration
+        # MITM config
         self.mitm_target_ip = ""
         self.mitm_gateway_ip = ""
-        self.mitm_modules = {
-            "arp_poison": True,
-            "ssl_strip": True,
-            "dns_spoof": True,
-            "cred_harvest": True,
-        }
+        self.dns_spoof_domain = ""
+
+        # Infrastructure
+        self.config_loader = None
+        self.plugin_manager = None
+        self.capability_manager = None
+        self.radio_manager = None
+        self.monitor_manager = None
+        self.chip_detector = None
+        self.session_manager = None
+
+        # Initialize infrastructure
+        self._init_infrastructure()
 
         # UI state
-        self.menu_selected = 0
-        self.in_submenu = False
         self.status_message = "Ready"
         self.last_refresh = 0
-        self.show_log_panel = True
+        self.input_mode = False
+        self.input_buffer = ""
+        self.input_field = ""
+        self.input_callback = None
+
+        # Intercepted traffic for MITM tab
+        self.intercepted_traffic: List[Dict] = []
+
+    def _init_infrastructure(self):
+        """Initialize infrastructure modules."""
+        if ConfigLoader is not None:
+            try:
+                self.config_loader = ConfigLoader()
+            except Exception:
+                pass
+        if PluginManager is not None:
+            try:
+                self.plugin_manager = PluginManager()
+            except Exception:
+                pass
+        if CapabilityManager is not None:
+            try:
+                self.capability_manager = CapabilityManager()
+            except Exception:
+                pass
+        if RadioManager is not None:
+            try:
+                self.radio_manager = RadioManager()
+            except Exception:
+                pass
+        if MonitorManager is not None:
+            try:
+                self.monitor_manager = MonitorManager()
+            except Exception:
+                pass
+        if ChipDetector is not None:
+            try:
+                self.chip_detector = ChipDetector()
+            except Exception:
+                pass
+        if SessionManager is not None:
+            try:
+                self.session_manager = SessionManager()
+            except Exception:
+                pass
+
+    # ================================================================
+    # PUBLIC API
+    # ================================================================
 
     def run(self):
         """Main entry point - wraps curses."""
@@ -201,13 +770,17 @@ class TerminalUI:
             print(f"Terminal UI error: {e}")
             print("Ensure your terminal supports curses (not a pipe or redirect).")
 
+    # ================================================================
+    # MAIN LOOP
+    # ================================================================
+
     def _main_loop(self, stdscr):
         """Main curses event loop."""
         self.stdscr = stdscr
         _init_colors()
         curses.curs_set(0)
         stdscr.nodelay(True)
-        stdscr.timeout(500)  # Refresh every 500ms
+        stdscr.timeout(500)
 
         while self.running:
             try:
@@ -222,260 +795,1677 @@ class TerminalUI:
 
         self._cleanup()
 
-    def _cleanup(self):
-        """Stop all running engines."""
-        if self.recon_engine and self.recon_running:
-            try:
-                self.recon_engine.stop()
-            except Exception:
-                pass
-            self.recon_running = False
-        if self.attack_orchestrator and self.attack_running:
-            try:
-                self.attack_orchestrator.stop()
-            except Exception:
-                pass
-            self.attack_running = False
-        if self.mitm_engine and self.mitm_running:
-            try:
-                self.mitm_engine.stop()
-            except Exception:
-                pass
-            self.mitm_running = False
+    # ================================================================
+    # SAFE DRAWING HELPERS
+    # ================================================================
+
+    def _safe_addstr(self, win, y, x, text, attr=0):
+        """Safely add a string, catching curses errors for edge cases."""
         try:
-            self.db.close()
-        except Exception:
+            h, w = win.getmaxyx()
+            if y < 0 or y >= h or x < 0:
+                return
+            max_len = w - x - 1
+            if max_len <= 0:
+                return
+            win.addstr(y, x, str(text)[:max_len], attr)
+        except curses.error:
             pass
+
+    def _safe_hline(self, win, y, x, ch, n, attr=0):
+        """Safely draw a horizontal line."""
+        try:
+            h, w = win.getmaxyx()
+            if y < 0 or y >= h or x < 0:
+                return
+            max_n = min(n, w - x - 1)
+            if max_n <= 0:
+                return
+            win.hline(y, x, ch, max_n, attr)
+        except curses.error:
+            pass
+
+    def _draw_box(self, win, y, x, height, width, title=""):
+        """Draw a bordered box with optional title."""
+        try:
+            h, w = win.getmaxyx()
+            if y + height > h or x + width > w:
+                height = min(height, h - y)
+                width = min(width, w - x)
+            if height < 2 or width < 2:
+                return
+            # Top border
+            self._safe_addstr(win, y, x, "+" + "-" * (width - 2) + "+")
+            # Sides
+            for i in range(1, height - 1):
+                self._safe_addstr(win, y + i, x, "|")
+                self._safe_addstr(win, y + i, x + width - 1, "|")
+            # Bottom border
+            self._safe_addstr(win, y + height - 1, x, "+" + "-" * (width - 2) + "+")
+            # Title
+            if title:
+                self._safe_addstr(win, y, x + 2, f" {title} ", curses.color_pair(COLOR_HEADER))
+        except curses.error:
+            pass
+
+    # ================================================================
+    # MAIN DRAW
+    # ================================================================
+
+    def _draw(self, stdscr):
+        """Main draw routine."""
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        if h < 10 or w < 40:
+            self._safe_addstr(stdscr, 0, 0, "Terminal too small. Resize to at least 40x10.")
+            stdscr.refresh()
+            return
+
+        # Draw header
+        self._draw_header(stdscr, w)
+        # Draw tabs
+        self._draw_tabs(stdscr, w)
+        # Draw content area (row 3 to h-3)
+        self._draw_content(stdscr, h, w)
+        # Draw status bar
+        self._draw_status_bar(stdscr, h, w)
+        # Draw help bar
+        self._draw_help_bar(stdscr, h, w)
+        # Draw popup if active
+        if self.show_popup:
+            self._draw_popup(stdscr, h, w)
+        # Draw input mode if active
+        if self.input_mode:
+            self._draw_input(stdscr, h, w)
+
+        stdscr.refresh()
+
+    def _draw_header(self, stdscr, w):
+        """Draw the header banner."""
+        title = f" POSFramework v{VERSION} - Advanced WiFi Security Suite "
+        self._safe_addstr(stdscr, 0, 0, " " * w, curses.color_pair(COLOR_STATUS))
+        x = max(0, (w - len(title)) // 2)
+        self._safe_addstr(stdscr, 0, x, title, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+
+    def _draw_tabs(self, stdscr, w):
+        """Draw the tab bar."""
+        x = 0
+        for i, tab in enumerate(TABS):
+            label = f" {i+1}:{tab} "
+            if i == self.active_tab:
+                attr = curses.color_pair(COLOR_TAB_ACTIVE) | curses.A_BOLD
+            else:
+                attr = curses.color_pair(COLOR_TAB_INACTIVE)
+            self._safe_addstr(stdscr, 1, x, label, attr)
+            x += len(label)
+        # Fill remainder
+        if x < w:
+            self._safe_addstr(stdscr, 1, x, " " * (w - x - 1), curses.color_pair(COLOR_TAB_INACTIVE))
+
+    def _draw_content(self, stdscr, h, w):
+        """Draw content based on active tab."""
+        # Content area: row 3 to h-3
+        tab = TABS[self.active_tab]
+        if tab == "Targets":
+            self._draw_targets_tab(stdscr, h, w)
+        elif tab == "WiFi Attacks":
+            self._draw_wifi_attacks_tab(stdscr, h, w)
+        elif tab == "Cred Attacks":
+            self._draw_cred_attacks_tab(stdscr, h, w)
+        elif tab == "MITM":
+            self._draw_mitm_tab(stdscr, h, w)
+        elif tab == "Network":
+            self._draw_network_tab(stdscr, h, w)
+        elif tab == "BLE/SDR":
+            self._draw_ble_sdr_tab(stdscr, h, w)
+        elif tab == "Harvester":
+            self._draw_harvester_tab(stdscr, h, w)
+        elif tab == "Cracking":
+            self._draw_cracking_tab(stdscr, h, w)
+        elif tab == "Settings":
+            self._draw_settings_tab(stdscr, h, w)
+
+    def _draw_status_bar(self, stdscr, h, w):
+        """Draw the status bar with running engine info."""
+        y = h - 2
+        self._safe_addstr(stdscr, y, 0, " " * w, curses.color_pair(COLOR_STATUS))
+
+        # Running engines count
+        running_count = sum(1 for e in self.wifi_attacks.values() if e.is_running)
+        running_count += sum(1 for e in self.cred_attacks.values() if e.is_running)
+        running_count += sum(1 for e in self.mitm_attacks.values() if e.is_running)
+        running_count += sum(1 for e in self.network_modules.values() if e.is_running)
+        running_count += sum(1 for e in self.ble_sdr_modules.values() if e.is_running)
+        if self.recon_running:
+            running_count += 1
+        if self.harvester_running:
+            running_count += 1
+
+        # AP/Client counts
+        aps = self._get_access_points()
+        clients = self._get_clients()
+        creds = self._get_credentials_count()
+
+        parts = []
+        parts.append(f"Engines:{running_count}")
+        parts.append(f"APs:{len(aps)}")
+        parts.append(f"Clients:{len(clients)}")
+        parts.append(f"Creds:{creds}")
+
+        if self.recon_running:
+            parts.append("[RECON]")
+        if self.autopwn_running:
+            parts.append(f"[AUTOPWN:{self.autopwn_state}]")
+        if self.selected_target:
+            bssid = self.selected_target.get("bssid", "?")[:17]
+            parts.append(f"Target:{bssid}")
+
+        now = datetime.now().strftime("%H:%M:%S")
+        parts.append(now)
+
+        status_text = " | ".join(parts)
+        self._safe_addstr(stdscr, y, 1, status_text, curses.color_pair(COLOR_STATUS))
+
+    def _draw_help_bar(self, stdscr, h, w):
+        """Draw context-sensitive help bar."""
+        y = h - 1
+        tab = TABS[self.active_tab]
+        if tab == "Targets":
+            help_text = " q:Quit Tab/1-9:Tabs s:Sort Enter:Attack Menu Space:Toggle View arrows:Nav a:AutoPwn r:Refresh"
+        elif tab == "Harvester":
+            help_text = " q:Quit Tab/1-9:Tabs Enter:Start/Stop Space:Config e:Export r:Refresh"
+        elif tab == "Cracking":
+            help_text = " q:Quit Tab/1-9:Tabs Enter:Start/Stop Space:Toggle Mode arrows:Nav"
+        else:
+            help_text = " q:Quit Tab/1-9:Tabs Enter:Action Space:Toggle arrows:Nav a:AutoPwn e:Export r:Refresh"
+        self._safe_addstr(stdscr, y, 0, help_text[:w-1], curses.color_pair(COLOR_HEADER))
+
+    # ================================================================
+    # TARGETS TAB
+    # ================================================================
+
+    def _draw_targets_tab(self, stdscr, h, w):
+        """Draw the Targets tab with sortable AP and client tables."""
+        start_y = 3
+        # Header
+        sort_name = SORT_MODES[self.sort_mode]
+        view_label = "Access Points" if self.target_view == "ap" else "Clients"
+        header = f" [{view_label}] Sort: {sort_name} | Space: Toggle AP/Client View | s: Cycle Sort"
+        self._safe_addstr(stdscr, start_y, 1, header, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+
+        if self.target_view == "ap":
+            self._draw_ap_table(stdscr, start_y + 2, h, w)
+        else:
+            self._draw_client_table(stdscr, start_y + 2, h, w)
+
+    def _draw_ap_table(self, stdscr, start_y, h, w):
+        """Draw AP table with columns."""
+        # Column headers
+        cols = " {:17s} {:20s} {:3s} {:8s} {:5s} {:12s} {:3s} {:4s}".format(
+            "BSSID", "SSID", "Ch", "Security", "RSSI", "Vendor", "POS", "Cli"
+        )
+        self._safe_addstr(stdscr, start_y, 1, cols[:w-2], curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
+        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+
+        aps = self._get_access_points()
+        max_rows = h - start_y - 5
+        visible_aps = aps[self.scroll_offset:self.scroll_offset + max_rows]
+
+        for i, ap in enumerate(visible_aps):
+            y = start_y + 2 + i
+            if y >= h - 3:
+                break
+            actual_idx = self.scroll_offset + i
+            bssid = ap.get("bssid", "??:??:??:??:??:??")[:17]
+            ssid = ap.get("ssid", "<hidden>")[:20]
+            ch = str(ap.get("channel", "?"))[:3]
+            sec = ap.get("security", "?")[:8]
+            rssi = str(ap.get("rssi", "?"))[:5]
+            vendor = ap.get("vendor", "")[:12]
+            pos = "YES" if ap.get("is_pos", False) else ""
+            cli_count = str(ap.get("client_count", 0))[:4]
+
+            line = " {:17s} {:20s} {:3s} {:8s} {:5s} {:12s} {:3s} {:4s}".format(
+                bssid, ssid, ch, sec, rssi, vendor, pos, cli_count
+            )
+
+            if actual_idx == self.selected_target_idx:
+                attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+                self.selected_target = ap
+            elif ap.get("is_pos", False):
+                attr = curses.color_pair(COLOR_WARNING)
+            else:
+                attr = curses.color_pair(COLOR_NORMAL)
+
+            self._safe_addstr(stdscr, y, 1, line[:w-2], attr)
+
+    def _draw_client_table(self, stdscr, start_y, h, w):
+        """Draw client table with columns."""
+        cols = " {:17s} {:12s} {:17s} {:5s} {:10s} {:10s}".format(
+            "MAC", "Vendor", "Associated AP", "RSSI", "OS", "DevType"
+        )
+        self._safe_addstr(stdscr, start_y, 1, cols[:w-2], curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
+        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+
+        clients = self._get_clients()
+        max_rows = h - start_y - 5
+        visible_clients = clients[self.scroll_offset:self.scroll_offset + max_rows]
+
+        for i, client in enumerate(visible_clients):
+            y = start_y + 2 + i
+            if y >= h - 3:
+                break
+            actual_idx = self.scroll_offset + i
+            mac = client.get("mac", "??:??:??:??:??:??")[:17]
+            vendor = client.get("vendor", "")[:12]
+            assoc_ap = client.get("associated_ap", "")[:17]
+            rssi = str(client.get("rssi", "?"))[:5]
+            os_fp = client.get("os", "")[:10]
+            dev_type = client.get("device_type", "")[:10]
+
+            line = " {:17s} {:12s} {:17s} {:5s} {:10s} {:10s}".format(
+                mac, vendor, assoc_ap, rssi, os_fp, dev_type
+            )
+
+            if actual_idx == self.selected_client_idx:
+                attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+                self.selected_client = client
+            else:
+                attr = curses.color_pair(COLOR_NORMAL)
+
+            self._safe_addstr(stdscr, y, 1, line[:w-2], attr)
+
+    # ================================================================
+    # WIFI ATTACKS TAB
+    # ================================================================
+
+    def _draw_wifi_attacks_tab(self, stdscr, h, w):
+        """Draw WiFi Attacks tab with all attack modules."""
+        start_y = 3
+        title = " WiFi Attack Modules (Enter: Toggle Start/Stop)"
+        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+
+        if self.selected_target:
+            target_info = f" Target: {self.selected_target.get('ssid', '?')} ({self.selected_target.get('bssid', '?')})"
+            self._safe_addstr(stdscr, start_y + 1, 1, target_info, curses.color_pair(COLOR_WARNING))
+
+        self._safe_hline(stdscr, start_y + 2, 1, curses.ACS_HLINE, w - 2)
+
+        y = start_y + 3
+        items = list(self.wifi_attacks.items())
+        max_rows = h - y - 3
+        visible_items = items[self.scroll_offset:self.scroll_offset + max_rows]
+
+        for i, (key, engine) in enumerate(visible_items):
+            actual_idx = self.scroll_offset + i
+            row_y = y + i
+            if row_y >= h - 3:
+                break
+
+            # Status indicator
+            if engine.is_running:
+                status = "[RUNNING]"
+                status_color = curses.color_pair(COLOR_RUNNING)
+            elif engine.status == EngineStatus.FAILED:
+                status = "[FAILED]"
+                status_color = curses.color_pair(COLOR_ERROR)
+            elif engine.status == EngineStatus.SUCCESS:
+                status = "[DONE]"
+                status_color = curses.color_pair(COLOR_SUCCESS)
+            else:
+                status = "[IDLE]"
+                status_color = curses.color_pair(COLOR_NORMAL)
+
+            avail = "*" if engine.available else "x"
+            line = f" {avail} {engine.name:<28s} {status}"
+
+            if actual_idx == self.menu_selected:
+                attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+            else:
+                attr = status_color
+
+            self._safe_addstr(stdscr, row_y, 1, line[:w-2], attr)
+
+    # ================================================================
+    # CREDENTIAL ATTACKS TAB
+    # ================================================================
+
+    def _draw_cred_attacks_tab(self, stdscr, h, w):
+        """Draw Credential Attacks tab."""
+        start_y = 3
+        title = " Credential Attack Modules (Enter: Toggle Start/Stop)"
+        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+
+        y = start_y + 2
+        items = list(self.cred_attacks.items())
+        max_rows = h - y - 3
+        visible_items = items[self.scroll_offset:self.scroll_offset + max_rows]
+
+        for i, (key, engine) in enumerate(visible_items):
+            actual_idx = self.scroll_offset + i
+            row_y = y + i
+            if row_y >= h - 3:
+                break
+
+            if engine.is_running:
+                status = "[RUNNING]"
+                status_color = curses.color_pair(COLOR_RUNNING)
+            elif engine.status == EngineStatus.FAILED:
+                status = "[FAILED]"
+                status_color = curses.color_pair(COLOR_ERROR)
+            else:
+                status = "[IDLE]"
+                status_color = curses.color_pair(COLOR_NORMAL)
+
+            avail = "*" if engine.available else "x"
+            line = f" {avail} {engine.name:<28s} {status}"
+
+            if actual_idx == self.menu_selected:
+                attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+            else:
+                attr = status_color
+
+            self._safe_addstr(stdscr, row_y, 1, line[:w-2], attr)
+
+    # ================================================================
+    # MITM TAB
+    # ================================================================
+
+    def _draw_mitm_tab(self, stdscr, h, w):
+        """Draw MITM tab with attack modules and intercepted traffic."""
+        start_y = 3
+        title = " Man-in-the-Middle Attacks"
+        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+
+        # Config display
+        cfg_y = start_y + 1
+        self._safe_addstr(stdscr, cfg_y, 1,
+                          f" Target IP: {self.mitm_target_ip or '<not set>'} | Gateway: {self.mitm_gateway_ip or '<not set>'} | DNS Domain: {self.dns_spoof_domain or '<any>'}",
+                          curses.color_pair(COLOR_WARNING))
+        self._safe_hline(stdscr, cfg_y + 1, 1, curses.ACS_HLINE, w - 2)
+
+        # Attack modules
+        y = cfg_y + 2
+        items = list(self.mitm_attacks.items())
+        for i, (key, engine) in enumerate(items):
+            row_y = y + i
+            if row_y >= h - 3:
+                break
+
+            if engine.is_running:
+                status = "[RUNNING]"
+                status_color = curses.color_pair(COLOR_RUNNING)
+            else:
+                status = "[IDLE]"
+                status_color = curses.color_pair(COLOR_NORMAL)
+
+            avail = "*" if engine.available else "x"
+            line = f" {avail} {engine.name:<28s} {status}"
+
+            if i == self.menu_selected:
+                attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+            else:
+                attr = status_color
+
+            self._safe_addstr(stdscr, row_y, 1, line[:w-2], attr)
+
+        # Intercepted traffic table
+        traffic_y = y + len(items) + 1
+        self._safe_addstr(stdscr, traffic_y, 1, " Intercepted Traffic:",
+                          curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
+        self._safe_hline(stdscr, traffic_y + 1, 1, curses.ACS_HLINE, w - 2)
+
+        cols = " {:15s} {:15s} {:8s} {:30s}".format("Source", "Dest", "Proto", "Data")
+        self._safe_addstr(stdscr, traffic_y + 2, 1, cols[:w-2], curses.color_pair(COLOR_ACCENT))
+
+        max_traffic = h - traffic_y - 6
+        for i, traffic in enumerate(self.intercepted_traffic[-max_traffic:]):
+            ty = traffic_y + 3 + i
+            if ty >= h - 3:
+                break
+            src = traffic.get("src", "?")[:15]
+            dst = traffic.get("dst", "?")[:15]
+            proto = traffic.get("proto", "?")[:8]
+            data = traffic.get("data", "")[:30]
+            line = " {:15s} {:15s} {:8s} {:30s}".format(src, dst, proto, data)
+            self._safe_addstr(stdscr, ty, 1, line[:w-2], curses.color_pair(COLOR_NORMAL))
+
+    # ================================================================
+    # NETWORK TAB
+    # ================================================================
+
+    def _draw_network_tab(self, stdscr, h, w):
+        """Draw Network tab."""
+        start_y = 3
+        title = " Network Reconnaissance & Exploitation"
+        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+
+        y = start_y + 2
+        items = list(self.network_modules.items())
+        max_rows = h - y - 3
+        visible_items = items[self.scroll_offset:self.scroll_offset + max_rows]
+
+        for i, (key, engine) in enumerate(visible_items):
+            actual_idx = self.scroll_offset + i
+            row_y = y + i
+            if row_y >= h - 3:
+                break
+
+            if engine.is_running:
+                status = "[RUNNING]"
+                status_color = curses.color_pair(COLOR_RUNNING)
+            elif engine.status == EngineStatus.FAILED:
+                status = "[FAILED]"
+                status_color = curses.color_pair(COLOR_ERROR)
+            else:
+                status = "[IDLE]"
+                status_color = curses.color_pair(COLOR_NORMAL)
+
+            avail = "*" if engine.available else "x"
+            line = f" {avail} {engine.name:<28s} {status}"
+
+            if actual_idx == self.menu_selected:
+                attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+            else:
+                attr = status_color
+
+            self._safe_addstr(stdscr, row_y, 1, line[:w-2], attr)
+
+    # ================================================================
+    # BLE/SDR TAB
+    # ================================================================
+
+    def _draw_ble_sdr_tab(self, stdscr, h, w):
+        """Draw BLE/SDR tab with all BLE, SDR, and GPS modules."""
+        start_y = 3
+        title = " BLE / SDR / GPS Modules"
+        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+
+        y = start_y + 2
+        items = list(self.ble_sdr_modules.items())
+        max_rows = h - y - 3
+        visible_items = items[self.scroll_offset:self.scroll_offset + max_rows]
+
+        for i, (key, engine) in enumerate(visible_items):
+            actual_idx = self.scroll_offset + i
+            row_y = y + i
+            if row_y >= h - 3:
+                break
+
+            if engine.is_running:
+                status = "[RUNNING]"
+                status_color = curses.color_pair(COLOR_RUNNING)
+            elif engine.status == EngineStatus.FAILED:
+                status = "[FAILED]"
+                status_color = curses.color_pair(COLOR_ERROR)
+            else:
+                status = "[IDLE]"
+                status_color = curses.color_pair(COLOR_NORMAL)
+
+            avail = "*" if engine.available else "x"
+            line = f" {avail} {engine.name:<28s} {status}"
+
+            if actual_idx == self.menu_selected:
+                attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+            else:
+                attr = status_color
+
+            self._safe_addstr(stdscr, row_y, 1, line[:w-2], attr)
+
+    # ================================================================
+    # HARVESTER TAB
+    # ================================================================
+
+    def _draw_harvester_tab(self, stdscr, h, w):
+        """Draw Harvester tab - live tshark decryption + pyWhat analysis."""
+        start_y = 3
+        title = " Passive Credential & Secret Harvester (tshark + pyWhat)"
+        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+
+        # Controls row
+        ctrl_y = start_y + 1
+        running_label = "[RUNNING]" if self.harvester_running else "[STOPPED]"
+        running_color = curses.color_pair(COLOR_RUNNING) if self.harvester_running else curses.color_pair(COLOR_STOPPED)
+        self._safe_addstr(stdscr, ctrl_y, 1, f" Status: ", curses.color_pair(COLOR_NORMAL))
+        self._safe_addstr(stdscr, ctrl_y, 10, running_label, running_color)
+
+        pywhat_status = "active" if self.pywhat_analyzer else "unavailable"
+        self._safe_addstr(stdscr, ctrl_y, 22, f" | pyWhat: {pywhat_status} | PSK: {self.harvester_psk or '<none>'} | SSID: {self.harvester_ssid or '<none>'}",
+                          curses.color_pair(COLOR_WARNING))
+
+        self._safe_hline(stdscr, ctrl_y + 1, 1, curses.ACS_HLINE, w - 2)
+
+        # Split view: top half = decrypted feed, bottom half = pyWhat findings
+        content_h = h - ctrl_y - 5
+        feed_h = content_h // 2
+        findings_h = content_h - feed_h
+
+        # Decrypted traffic feed
+        feed_y = ctrl_y + 2
+        self._safe_addstr(stdscr, feed_y, 1, " Live Decrypted Traffic Feed:",
+                          curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
+
+        feed_data = self._get_decryption_feed()
+        cols = " {:8s} {:8s} {:40s}".format("Time", "Proto", "Data")
+        self._safe_addstr(stdscr, feed_y + 1, 1, cols[:w-2], curses.color_pair(COLOR_ACCENT))
+
+        max_feed = min(feed_h - 3, len(feed_data))
+        for i in range(max_feed):
+            entry = feed_data[-(max_feed - i)]
+            fy = feed_y + 2 + i
+            if fy >= feed_y + feed_h:
+                break
+            ts = entry.get("time", "")[:8]
+            proto = entry.get("proto", "")[:8]
+            data = entry.get("data", "")[:40]
+            line = " {:8s} {:8s} {:40s}".format(ts, proto, data)
+            self._safe_addstr(stdscr, fy, 1, line[:w-2], curses.color_pair(COLOR_NORMAL))
+
+        # pyWhat findings table
+        findings_y = feed_y + feed_h
+        self._safe_addstr(stdscr, findings_y, 1, " pyWhat Findings (Secrets, Keys, Credentials):",
+                          curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
+
+        findings_cols = " {:8s} {:15s} {:30s} {:6s} {:8s}".format(
+            "Time", "Type", "Value", "Conf", "Source"
+        )
+        self._safe_addstr(stdscr, findings_y + 1, 1, findings_cols[:w-2], curses.color_pair(COLOR_ACCENT))
+
+        findings = self._get_harvester_findings()
+        max_findings = min(findings_h - 3, len(findings))
+        for i in range(max_findings):
+            finding = findings[-(max_findings - i)]
+            fy = findings_y + 2 + i
+            if fy >= h - 3:
+                break
+            ts = finding.get("timestamp", "")[:8]
+            ftype = finding.get("name", finding.get("type", ""))[:15]
+            value = finding.get("value", "")[:30]
+            conf = str(finding.get("confidence", ""))[:6]
+            source = finding.get("source", finding.get("category", ""))[:8]
+            line = " {:8s} {:15s} {:30s} {:6s} {:8s}".format(ts, ftype, value, conf, source)
+
+            # Color based on confidence
+            if finding.get("confidence", 0) >= 0.8:
+                attr = curses.color_pair(COLOR_ERROR) | curses.A_BOLD
+            elif finding.get("confidence", 0) >= 0.5:
+                attr = curses.color_pair(COLOR_WARNING)
+            else:
+                attr = curses.color_pair(COLOR_NORMAL)
+
+            self._safe_addstr(stdscr, fy, 1, line[:w-2], attr)
+
+        # Attack surfaces summary at bottom if space
+        if findings_y + max_findings + 3 < h - 3 and self.pywhat_analyzer:
+            surf_y = findings_y + max_findings + 3
+            self._safe_addstr(stdscr, surf_y, 1, " Attack Surfaces:",
+                              curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
+            surfaces = self._get_attack_surfaces()
+            sx = 1
+            for category, items in list(surfaces.items())[:6]:
+                label = f" {category}:{len(items)}"
+                self._safe_addstr(stdscr, surf_y + 1, sx, label,
+                                  curses.color_pair(COLOR_WARNING))
+                sx += len(label) + 1
+
+    # ================================================================
+    # CRACKING TAB
+    # ================================================================
+
+    def _draw_cracking_tab(self, stdscr, h, w):
+        """Draw Cracking tab with hashcat/john integration."""
+        start_y = 3
+        title = " Password Cracking (Hashcat / John the Ripper)"
+        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+
+        # Status
+        y = start_y + 2
+        crack_status = "[CRACKING]" if self.cracking_active else "[IDLE]"
+        crack_color = curses.color_pair(COLOR_RUNNING) if self.cracking_active else curses.color_pair(COLOR_NORMAL)
+        self._safe_addstr(stdscr, y, 1, f" Status: {crack_status}  Mode: {self.cracking_mode}  Wordlist: {self.wordlist_path}", crack_color)
+
+        # Progress bar
+        y += 1
+        if self.cracking_active:
+            bar_w = min(40, w - 20)
+            filled = int(bar_w * self.cracking_progress)
+            bar = "[" + "#" * filled + "-" * (bar_w - filled) + f"] {self.cracking_progress*100:.1f}%"
+            self._safe_addstr(stdscr, y, 1, f" Progress: {bar}", curses.color_pair(COLOR_SUCCESS))
+
+        # Menu items
+        y += 2
+        menu_items = [
+            ("Start Hashcat", HashcatIntegration is not None),
+            ("Start John", JohnIntegration is not None),
+            ("Stop Cracking", self.cracking_active),
+            (f"Mode: {self.cracking_mode}", True),
+            ("Select Wordlist", True),
+        ]
+
+        for i, (label, available) in enumerate(menu_items):
+            row_y = y + i
+            if row_y >= h - 3:
+                break
+            avail = "*" if available else "x"
+            line = f" {avail} {label}"
+            if i == self.menu_selected:
+                attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+            else:
+                attr = curses.color_pair(COLOR_NORMAL) if available else curses.color_pair(COLOR_ERROR)
+            self._safe_addstr(stdscr, row_y, 1, line[:w-2], attr)
+
+        # Captured handshakes list
+        hs_y = y + len(menu_items) + 1
+        self._safe_addstr(stdscr, hs_y, 1, " Captured Handshakes:",
+                          curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
+        handshakes = self._get_handshakes()
+        for i, hs in enumerate(handshakes[:h - hs_y - 4]):
+            row_y = hs_y + 1 + i
+            if row_y >= h - 3:
+                break
+            ssid = hs.get("ssid", "?")
+            bssid = hs.get("bssid", "?")
+            hs_type = hs.get("type", "4-way")
+            cracked = "[CRACKED]" if hs.get("cracked") else ""
+            line = f"   {ssid:<20s} {bssid:<17s} {hs_type:<8s} {cracked}"
+            attr = curses.color_pair(COLOR_SUCCESS) if hs.get("cracked") else curses.color_pair(COLOR_NORMAL)
+            self._safe_addstr(stdscr, row_y, 1, line[:w-2], attr)
+
+    # ================================================================
+    # SETTINGS TAB
+    # ================================================================
+
+    def _draw_settings_tab(self, stdscr, h, w):
+        """Draw Settings tab with all configuration options."""
+        start_y = 3
+        title = " Settings & Configuration"
+        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+
+        y = start_y + 2
+        settings_items = [
+            (f"Monitor Interface: {self.monitor_iface}", "iface"),
+            (f"AP Interface: {self.ap_iface}", "ap_iface"),
+            (f"5GHz Channels: {'ON' if self.use_5ghz else 'OFF'}", "5ghz"),
+            (f"RSSI Limit: {self.rssi_limit} dBm", "rssi"),
+            (f"Recon Duration: {self.recon_duration}s", "recon_dur"),
+            (f"DoS Mode: {self.dos_mode}", "dos_mode"),
+            (f"Signal Targeting: {'ON' if self.signal_targeting_enabled else 'OFF'}", "sig_target"),
+            (f"Verbose Mode: {'ON' if self.verbose_mode else 'OFF'}", "verbose"),
+            ("---", "sep"),
+            (f"Chip Detector: {'available' if self.chip_detector else 'N/A'}", "chip"),
+            (f"Monitor Manager: {'available' if self.monitor_manager else 'N/A'}", "mon_mgr"),
+            (f"Radio Manager: {'available' if self.radio_manager else 'N/A'}", "radio"),
+            (f"Plugin Manager: {'available' if self.plugin_manager else 'N/A'}", "plugins"),
+            (f"Capability Manager: {'available' if self.capability_manager else 'N/A'}", "caps"),
+            (f"Config Loader: {'available' if self.config_loader else 'N/A'}", "config"),
+            (f"Session Manager: {'available' if self.session_manager else 'N/A'}", "session"),
+            ("---", "sep2"),
+            (f"Platform: {sys.platform}", "info"),
+            (f"Python: {sys.version.split()[0]}", "info2"),
+            (f"Scapy: {'YES' if SCAPY_AVAILABLE else 'NO'}", "info3"),
+            (f"pyWhat: {'YES' if PyWhatAnalyzer else 'NO'}", "info4"),
+            (f"BLE (bleak): {'YES' if BLEScanner else 'NO'}", "info5"),
+            (f"SDR (pyrtlsdr): {'YES' if SDRManager else 'NO'}", "info6"),
+            (f"tshark: {'YES' if TsharkDecryptionEngine else 'NO'}", "info7"),
+        ]
+
+        max_rows = h - y - 3
+        visible = settings_items[self.scroll_offset:self.scroll_offset + max_rows]
+
+        for i, (label, key) in enumerate(visible):
+            actual_idx = self.scroll_offset + i
+            row_y = y + i
+            if row_y >= h - 3:
+                break
+
+            if label == "---":
+                self._safe_hline(stdscr, row_y, 1, curses.ACS_HLINE, w - 2)
+                continue
+
+            if actual_idx == self.menu_selected:
+                attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+            elif key.startswith("info"):
+                attr = curses.color_pair(COLOR_ACCENT)
+            else:
+                attr = curses.color_pair(COLOR_NORMAL)
+
+            self._safe_addstr(stdscr, row_y, 1, f" {label}", attr)
+
+    # ================================================================
+    # POPUP / CONTEXT MENU
+    # ================================================================
+
+    def _draw_popup(self, stdscr, h, w):
+        """Draw a context-sensitive popup/submenu."""
+        popup_w = min(50, w - 4)
+        popup_h = min(len(self.popup_items) + 4, h - 4)
+        start_y = max(2, (h - popup_h) // 2)
+        start_x = max(2, (w - popup_w) // 2)
+
+        # Draw box
+        self._draw_box(stdscr, start_y, start_x, popup_h, popup_w, self.popup_title)
+
+        # Draw items
+        for i, item in enumerate(self.popup_items):
+            if i >= popup_h - 3:
+                break
+            iy = start_y + 1 + i
+            if i == self.popup_selected:
+                attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+            else:
+                attr = curses.color_pair(COLOR_NORMAL)
+            self._safe_addstr(stdscr, iy, start_x + 2, item[:popup_w - 4], attr)
+
+    def _draw_input(self, stdscr, h, w):
+        """Draw input field overlay."""
+        input_w = min(60, w - 4)
+        start_y = h // 2
+        start_x = max(2, (w - input_w) // 2)
+
+        self._draw_box(stdscr, start_y - 1, start_x, 4, input_w, self.input_field)
+        self._safe_addstr(stdscr, start_y + 1, start_x + 2,
+                          self.input_buffer + "_", curses.color_pair(COLOR_HEADER))
+
+    # ================================================================
+    # INPUT HANDLING
+    # ================================================================
 
     def _handle_input(self, key):
         """Process keyboard input."""
+        # Input mode handling
+        if self.input_mode:
+            self._handle_input_mode(key)
+            return
+
+        # Popup handling
+        if self.show_popup:
+            self._handle_popup_input(key)
+            return
+
+        # Global keys
         if key == ord('q') or key == ord('Q'):
             self.running = False
-        elif key == ord('\t') or key == curses.KEY_RIGHT:
-            # Next tab
+        elif key == ord('\t'):
             self.active_tab = (self.active_tab + 1) % len(TABS)
             self.scroll_offset = 0
             self.menu_selected = 0
-        elif key == curses.KEY_BTAB or key == curses.KEY_LEFT:
-            # Previous tab
+        elif key == curses.KEY_BTAB:
             self.active_tab = (self.active_tab - 1) % len(TABS)
             self.scroll_offset = 0
             self.menu_selected = 0
+        elif key >= ord('1') and key <= ord('9'):
+            idx = key - ord('1')
+            if idx < len(TABS):
+                self.active_tab = idx
+                self.scroll_offset = 0
+                self.menu_selected = 0
         elif key == curses.KEY_UP:
             if self.menu_selected > 0:
                 self.menu_selected -= 1
+            elif self.scroll_offset > 0:
+                self.scroll_offset -= 1
         elif key == curses.KEY_DOWN:
-            self.menu_selected += 1
-            # Cap based on current tab's menu items
             max_items = self._get_max_menu_items()
-            if self.menu_selected >= max_items:
-                self.menu_selected = max_items - 1
+            if self.menu_selected < max_items - 1:
+                self.menu_selected += 1
+            else:
+                self.scroll_offset += 1
         elif key == curses.KEY_PPAGE:
-            # Page up for log scroll
             self.scroll_offset = max(0, self.scroll_offset - 10)
         elif key == curses.KEY_NPAGE:
-            # Page down for log scroll
             self.scroll_offset += 10
-        elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:
+        elif key == ord('\n') or key == 10 or key == curses.KEY_ENTER:
             self._handle_action()
         elif key == ord(' '):
-            # Space toggles checkboxes
             self._handle_toggle()
-        elif key >= ord('1') and key <= ord('6'):
-            # Quick tab switch with number keys
-            self.active_tab = key - ord('1')
-            self.scroll_offset = 0
-            self.menu_selected = 0
-        elif key == ord('l') or key == ord('L'):
-            # Toggle log panel
-            self.show_log_panel = not self.show_log_panel
-        elif key == ord('c') or key == ord('C'):
-            # Clear log
-            self.log_handler.clear()
+        elif key == ord('s') or key == ord('S'):
+            self._handle_sort()
+        elif key == ord('a') or key == ord('A'):
+            self._handle_autopwn()
+        elif key == ord('e') or key == ord('E'):
+            self._handle_export()
+        elif key == ord('r') or key == ord('R'):
+            self._handle_refresh()
+        elif key == ord('f') or key == ord('/'):
+            self._start_input("Filter", "filter", self._apply_filter)
 
-    def _get_max_menu_items(self):
-        """Get the maximum number of selectable items for the current tab."""
-        tab = TABS[self.active_tab]
-        if tab == "Recon":
-            return 5  # Start/Stop, Clear, Verbose, Signal Targeting, 5GHz
-        elif tab == "Attack":
-            return 12  # Start/Stop, Auto-target + 9 modules + DoS mode
-        elif tab == "MITM":
-            return 6  # Start/Stop + 4 modules + info
-        elif tab == "Credentials":
-            return 3  # Refresh, Export, Clear
-        elif tab == "Printers":
-            return 2  # Start/Stop scan
-        elif tab == "Settings":
-            return 5  # Interface, AP interface, 5GHz, Verbose, About
-        return 1
+    def _handle_input_mode(self, key):
+        """Handle key input while in text input mode."""
+        if key == 27:  # ESC
+            self.input_mode = False
+            self.input_buffer = ""
+        elif key == ord('\n') or key == 10:
+            self.input_mode = False
+            if self.input_callback:
+                self.input_callback(self.input_buffer)
+            self.input_buffer = ""
+        elif key == curses.KEY_BACKSPACE or key == 127 or key == 8:
+            self.input_buffer = self.input_buffer[:-1]
+        elif 32 <= key <= 126:
+            self.input_buffer += chr(key)
+
+    def _handle_popup_input(self, key):
+        """Handle input when popup is showing."""
+        if key == 27 or key == ord('q'):  # ESC or q
+            self.show_popup = False
+        elif key == curses.KEY_UP:
+            if self.popup_selected > 0:
+                self.popup_selected -= 1
+        elif key == curses.KEY_DOWN:
+            if self.popup_selected < len(self.popup_items) - 1:
+                self.popup_selected += 1
+        elif key == ord('\n') or key == 10:
+            self._execute_popup_action()
+            self.show_popup = False
+
+    def _start_input(self, label, field, callback):
+        """Start text input mode."""
+        self.input_mode = True
+        self.input_field = label
+        self.input_buffer = ""
+        self.input_callback = callback
+
+    # ================================================================
+    # ACTION HANDLERS
+    # ================================================================
 
     def _handle_action(self):
         """Handle enter key press on current selection."""
         tab = TABS[self.active_tab]
-        if tab == "Recon":
-            self._handle_recon_action()
-        elif tab == "Attack":
-            self._handle_attack_action()
+        if tab == "Targets":
+            self._handle_targets_action()
+        elif tab == "WiFi Attacks":
+            self._handle_wifi_attack_action()
+        elif tab == "Cred Attacks":
+            self._handle_cred_attack_action()
         elif tab == "MITM":
             self._handle_mitm_action()
-        elif tab == "Credentials":
-            self._handle_cred_action()
-        elif tab == "Printers":
-            self._handle_printer_action()
+        elif tab == "Network":
+            self._handle_network_action()
+        elif tab == "BLE/SDR":
+            self._handle_ble_sdr_action()
+        elif tab == "Harvester":
+            self._handle_harvester_action()
+        elif tab == "Cracking":
+            self._handle_cracking_action()
         elif tab == "Settings":
             self._handle_settings_action()
 
     def _handle_toggle(self):
-        """Handle space key for toggling checkboxes."""
+        """Handle space key."""
         tab = TABS[self.active_tab]
-        if tab == "Recon":
-            if self.menu_selected == 2:
-                self.verbose_mode = not self.verbose_mode
-            elif self.menu_selected == 3:
-                self.signal_targeting = not self.signal_targeting
-            elif self.menu_selected == 4:
-                self.use_5ghz = not self.use_5ghz
-                self.channels = (CHANNELS_24GHZ + CHANNELS_5GHZ) if self.use_5ghz else CHANNELS_24GHZ
-        elif tab == "Attack":
-            # Indices 2-10 are module toggles
-            module_keys = list(self.attack_modules.keys())
-            idx = self.menu_selected - 2
-            if 0 <= idx < len(module_keys):
-                key = module_keys[idx]
-                self.attack_modules[key] = not self.attack_modules[key]
-        elif tab == "MITM":
-            # Indices 2-5 are MITM module toggles
-            module_keys = list(self.mitm_modules.keys())
-            idx = self.menu_selected - 2
-            if 0 <= idx < len(module_keys):
-                key = module_keys[idx]
-                self.mitm_modules[key] = not self.mitm_modules[key]
-
-    def _handle_recon_action(self):
-        """Handle recon tab actions."""
-        if self.menu_selected == 0:
-            # Start/Stop Recon
-            if not self.recon_running:
-                self._start_recon()
-            else:
-                self._stop_recon()
-        elif self.menu_selected == 1:
-            # Clear results
+        if tab == "Targets":
+            # Toggle between AP and client view
+            self.target_view = "client" if self.target_view == "ap" else "ap"
             self.scroll_offset = 0
-            self.status_message = "Results cleared from view"
-        elif self.menu_selected == 2:
-            self.verbose_mode = not self.verbose_mode
-            self.status_message = f"Verbose: {'ON' if self.verbose_mode else 'OFF'}"
-        elif self.menu_selected == 3:
-            self.signal_targeting = not self.signal_targeting
-            self.status_message = f"Signal targeting: {'ON' if self.signal_targeting else 'OFF'}"
-        elif self.menu_selected == 4:
-            self.use_5ghz = not self.use_5ghz
-            self.channels = (CHANNELS_24GHZ + CHANNELS_5GHZ) if self.use_5ghz else CHANNELS_24GHZ
-            self.status_message = f"5GHz: {'ON' if self.use_5ghz else 'OFF'} ({len(self.channels)} channels)"
+            self.menu_selected = 0
+        elif tab == "Settings":
+            self._toggle_setting()
 
-    def _handle_attack_action(self):
-        """Handle attack tab actions."""
-        if not SCAPY_AVAILABLE:
-            self.status_message = "Scapy not available - cannot run attacks"
-            return
-        if self.menu_selected == 0:
-            if not self.attack_running:
-                self._start_attack()
-            else:
-                self._stop_attack()
-        elif self.menu_selected == 1:
-            # Auto-target strongest POS AP
-            self._auto_target()
+    def _handle_sort(self):
+        """Cycle sort mode (Targets tab)."""
+        if TABS[self.active_tab] == "Targets":
+            self.sort_mode = (self.sort_mode + 1) % len(SORT_MODES)
+
+    def _handle_autopwn(self):
+        """Toggle AutoPwn mode."""
+        if self.autopwn_running:
+            self._stop_autopwn()
         else:
-            # Toggle attack modules (indices 2-10)
-            self._handle_toggle()
+            self._start_autopwn()
+
+    def _handle_export(self):
+        """Export data based on current tab."""
+        tab = TABS[self.active_tab]
+        try:
+            if tab == "Targets":
+                self._export_targets()
+            elif tab == "Harvester":
+                self._export_findings()
+            elif tab == "Cracking":
+                self._export_handshakes()
+            else:
+                self._export_targets()
+            self.status_message = "Export complete"
+        except Exception as e:
+            self.status_message = f"Export failed: {e}"
+
+    def _handle_refresh(self):
+        """Force refresh data."""
+        self.last_refresh = 0
+        self.status_message = "Refreshed"
+
+    # ================================================================
+    # TARGETS TAB ACTIONS
+    # ================================================================
+
+    def _handle_targets_action(self):
+        """Handle Enter on Targets tab - show context-sensitive attack popup."""
+        if self.target_view == "ap":
+            aps = self._get_access_points()
+            if aps and self.selected_target_idx < len(aps):
+                self.selected_target = aps[self.selected_target_idx]
+                self._show_ap_attack_popup()
+        else:
+            clients = self._get_clients()
+            if clients and self.selected_client_idx < len(clients):
+                self.selected_client = clients[self.selected_client_idx]
+                self._show_client_attack_popup()
+
+    def _show_ap_attack_popup(self):
+        """Show context-sensitive attack menu for selected AP."""
+        if not self.selected_target:
+            return
+        ssid = self.selected_target.get("ssid", "?")
+        security = self.selected_target.get("security", "").upper()
+
+        self.popup_title = f"Attack: {ssid}"
+        self.popup_items = [
+            "Deauthentication",
+            "Handshake Capture",
+            "PMKID Capture",
+            "Evil Twin / AP Clone",
+            "Beacon Flood",
+            "DoS Attack",
+            "KARMA AP",
+        ]
+
+        # Add WPA3-specific if WPA3 detected
+        if "WPA3" in security or "SAE" in security:
+            self.popup_items.append("WPA3 Downgrade Attack")
+            self.popup_items.append("SAE Flood")
+
+        self.popup_items.append("Multi-AP Capture")
+        self.popup_items.append("Cancel")
+
+        self.show_popup = True
+        self.popup_selected = 0
+
+    def _show_client_attack_popup(self):
+        """Show context-sensitive attack menu for selected client."""
+        if not self.selected_client:
+            return
+        mac = self.selected_client.get("mac", "?")
+
+        self.popup_title = f"Client: {mac}"
+        self.popup_items = [
+            "Deauth from AP",
+            "Profile Client",
+            "MITM (ARP Poison)",
+            "Session Hijack",
+            "Client Isolation",
+            "Cancel",
+        ]
+        self.show_popup = True
+        self.popup_selected = 0
+
+    def _execute_popup_action(self):
+        """Execute the selected popup action."""
+        if not self.popup_items:
+            return
+        action = self.popup_items[self.popup_selected]
+
+        if action == "Cancel":
+            return
+
+        # Map popup actions to engine toggles
+        action_map = {
+            "Deauthentication": ("wifi_attacks", "deauth"),
+            "Handshake Capture": ("wifi_attacks", "handshake"),
+            "PMKID Capture": ("wifi_attacks", "pmkid"),
+            "Evil Twin / AP Clone": ("wifi_attacks", "ap_clone"),
+            "Beacon Flood": ("wifi_attacks", "beacons"),
+            "DoS Attack": ("wifi_attacks", "dos_cts"),
+            "KARMA AP": ("wifi_attacks", "karma"),
+            "WPA3 Downgrade Attack": ("wifi_attacks", "wpa3_attack"),
+            "SAE Flood": ("wifi_attacks", "wpa3_attack"),
+            "Multi-AP Capture": ("wifi_attacks", "multi_cap"),
+            "Deauth from AP": ("wifi_attacks", "deauth"),
+            "MITM (ARP Poison)": ("mitm_attacks", "arp"),
+            "Session Hijack": ("cred_attacks", "session"),
+            "Client Isolation": ("wifi_attacks", "client_iso"),
+        }
+
+        if action in action_map:
+            group, key = action_map[action]
+            engines = getattr(self, group, {})
+            if key in engines:
+                engine = engines[key]
+                if not engine.is_running:
+                    engine.toggle()
+                    self.status_message = f"Started: {engine.name}"
+                else:
+                    self.status_message = f"Already running: {engine.name}"
+        elif action == "Profile Client":
+            if self.client_profiler and self.selected_client:
+                mac = self.selected_client.get("mac", "")
+                profile = self.client_profiler.get_profile(mac)
+                if profile:
+                    self.status_message = f"Profile: {profile.get('device_type', 'unknown')}"
+
+    # ================================================================
+    # WIFI ATTACK ACTIONS
+    # ================================================================
+
+    def _handle_wifi_attack_action(self):
+        """Toggle selected WiFi attack engine."""
+        items = list(self.wifi_attacks.items())
+        idx = self.menu_selected
+        if 0 <= idx < len(items):
+            key, engine = items[idx]
+            engine.toggle()
+            if engine.is_running:
+                self.status_message = f"Started: {engine.name}"
+            else:
+                self.status_message = f"Stopped: {engine.name}"
+
+    # ================================================================
+    # CREDENTIAL ATTACK ACTIONS
+    # ================================================================
+
+    def _handle_cred_attack_action(self):
+        """Toggle selected credential attack engine."""
+        items = list(self.cred_attacks.items())
+        idx = self.menu_selected
+        if 0 <= idx < len(items):
+            key, engine = items[idx]
+            engine.toggle()
+            if engine.is_running:
+                self.status_message = f"Started: {engine.name}"
+            else:
+                self.status_message = f"Stopped: {engine.name}"
+
+    # ================================================================
+    # MITM ACTIONS
+    # ================================================================
 
     def _handle_mitm_action(self):
         """Handle MITM tab actions."""
-        if not SCAPY_AVAILABLE:
-            self.status_message = "Scapy not available - cannot run MITM"
-            return
-        if self.menu_selected == 0:
-            if not self.mitm_running:
-                self._start_mitm()
+        items = list(self.mitm_attacks.items())
+        idx = self.menu_selected
+        if 0 <= idx < len(items):
+            key, engine = items[idx]
+            engine.toggle()
+            if engine.is_running:
+                self.status_message = f"Started: {engine.name}"
             else:
-                self._stop_mitm()
-        elif self.menu_selected == 1:
-            self.status_message = "Configure target/gateway in Settings tab"
+                self.status_message = f"Stopped: {engine.name}"
+
+    # ================================================================
+    # NETWORK ACTIONS
+    # ================================================================
+
+    def _handle_network_action(self):
+        """Toggle selected network module."""
+        items = list(self.network_modules.items())
+        idx = self.menu_selected
+        if 0 <= idx < len(items):
+            key, engine = items[idx]
+            engine.toggle()
+            if engine.is_running:
+                self.status_message = f"Started: {engine.name}"
+            else:
+                self.status_message = f"Stopped: {engine.name}"
+
+    # ================================================================
+    # BLE/SDR ACTIONS
+    # ================================================================
+
+    def _handle_ble_sdr_action(self):
+        """Toggle selected BLE/SDR module."""
+        items = list(self.ble_sdr_modules.items())
+        idx = self.menu_selected
+        if 0 <= idx < len(items):
+            key, engine = items[idx]
+            engine.toggle()
+            if engine.is_running:
+                self.status_message = f"Started: {engine.name}"
+            else:
+                self.status_message = f"Stopped: {engine.name}"
+
+    # ================================================================
+    # HARVESTER ACTIONS
+    # ================================================================
+
+    def _handle_harvester_action(self):
+        """Start/stop the harvester session."""
+        if self.harvester_running:
+            self._stop_harvester()
         else:
-            # Toggle MITM modules
-            self._handle_toggle()
+            self._start_harvester()
 
-    def _handle_cred_action(self):
-        """Handle credentials tab actions."""
-        if self.menu_selected == 0:
-            self.status_message = "Credentials refreshed"
-        elif self.menu_selected == 1:
-            self._export_credentials()
-        elif self.menu_selected == 2:
-            self.status_message = "Clear: use CLI 'analyze' mode for full DB operations"
-
-    def _handle_printer_action(self):
-        """Handle printer tab actions."""
-        if not SCAPY_AVAILABLE:
-            self.status_message = "Scapy not available - cannot scan printers"
+    def _start_harvester(self):
+        """Start live decryption session with pyWhat callback."""
+        if LiveDecryptionSession is None:
+            self.status_message = "tshark not available"
             return
-        if self.menu_selected == 0:
-            if not self.printer_running:
-                self._start_printer_recon()
+
+        try:
+            # Create pyWhat callback if available
+            if PyWhatCallback is not None and self.pywhat_analyzer is not None:
+                self.pywhat_callback = PyWhatCallback(
+                    analyzer=self.pywhat_analyzer
+                )
+                self.harvester_session = LiveDecryptionSession(
+                    callback=self.pywhat_callback
+                )
             else:
-                self._stop_printer_recon()
+                self.harvester_session = LiveDecryptionSession()
+
+            # Build start args
+            kwargs = {}
+            if self.harvester_psk and self.harvester_ssid:
+                kwargs["psk"] = self.harvester_psk
+                kwargs["ssid"] = self.harvester_ssid
+            if self.harvester_wep_key:
+                kwargs["wep_key"] = self.harvester_wep_key
+            kwargs["interface"] = self.monitor_iface
+
+            self.harvester_session.start(**kwargs)
+            self.harvester_running = True
+            self.status_message = "Harvester started"
+        except Exception as e:
+            self.status_message = f"Harvester error: {e}"
+            self.harvester_running = False
+
+    def _stop_harvester(self):
+        """Stop live decryption session."""
+        if self.harvester_session:
+            try:
+                self.harvester_session.stop()
+            except Exception:
+                pass
+        self.harvester_running = False
+        self.status_message = "Harvester stopped"
+
+    # ================================================================
+    # CRACKING ACTIONS
+    # ================================================================
+
+    def _handle_cracking_action(self):
+        """Handle cracking tab actions."""
+        if self.menu_selected == 0:
+            # Start Hashcat
+            self._start_hashcat()
         elif self.menu_selected == 1:
-            self.status_message = "Printer results shown below"
+            # Start John
+            self._start_john()
+        elif self.menu_selected == 2:
+            # Stop cracking
+            self._stop_cracking()
+        elif self.menu_selected == 3:
+            # Cycle mode
+            modes = ["dictionary", "brute-force", "rules"]
+            idx = modes.index(self.cracking_mode) if self.cracking_mode in modes else 0
+            self.cracking_mode = modes[(idx + 1) % len(modes)]
+        elif self.menu_selected == 4:
+            # Wordlist input
+            self._start_input("Wordlist Path", "wordlist", self._set_wordlist)
+
+    def _start_hashcat(self):
+        """Start hashcat cracking."""
+        if HashcatIntegration is None:
+            self.status_message = "Hashcat module not available"
+            return
+        try:
+            self.hashcat_engine = HashcatIntegration()
+            self.cracking_active = True
+            self.status_message = "Hashcat started"
+        except Exception as e:
+            self.status_message = f"Hashcat error: {e}"
+
+    def _start_john(self):
+        """Start John the Ripper cracking."""
+        if JohnIntegration is None:
+            self.status_message = "John module not available"
+            return
+        try:
+            self.john_engine = JohnIntegration()
+            self.cracking_active = True
+            self.status_message = "John started"
+        except Exception as e:
+            self.status_message = f"John error: {e}"
+
+    def _stop_cracking(self):
+        """Stop active cracking job."""
+        self.cracking_active = False
+        self.cracking_progress = 0.0
+        if self.hashcat_engine:
+            try:
+                self.hashcat_engine.stop()
+            except Exception:
+                pass
+            self.hashcat_engine = None
+        if self.john_engine:
+            try:
+                self.john_engine.stop()
+            except Exception:
+                pass
+            self.john_engine = None
+        self.status_message = "Cracking stopped"
+
+    def _set_wordlist(self, path):
+        """Set wordlist path from input."""
+        if path:
+            self.wordlist_path = path
+            self.status_message = f"Wordlist: {path}"
+
+    # ================================================================
+    # SETTINGS ACTIONS
+    # ================================================================
 
     def _handle_settings_action(self):
-        """Handle settings tab actions."""
+        """Handle settings tab Enter actions."""
         if self.menu_selected == 0:
-            # Toggle 5GHz
+            self._start_input("Monitor Interface", "iface", self._set_monitor_iface)
+        elif self.menu_selected == 1:
+            self._start_input("AP Interface", "ap_iface", self._set_ap_iface)
+        elif self.menu_selected == 3:
+            self._start_input("RSSI Limit (dBm)", "rssi", self._set_rssi_limit)
+        elif self.menu_selected == 4:
+            self._start_input("Recon Duration (seconds)", "recon_dur", self._set_recon_duration)
+
+    def _toggle_setting(self):
+        """Toggle boolean settings."""
+        if self.menu_selected == 2:
             self.use_5ghz = not self.use_5ghz
             self.channels = (CHANNELS_24GHZ + CHANNELS_5GHZ) if self.use_5ghz else CHANNELS_24GHZ
-            self.status_message = f"5GHz scanning: {'enabled' if self.use_5ghz else 'disabled'}"
-        elif self.menu_selected == 1:
+        elif self.menu_selected == 6:
+            self.signal_targeting_enabled = not self.signal_targeting_enabled
+        elif self.menu_selected == 7:
             self.verbose_mode = not self.verbose_mode
-            self.status_message = f"Verbose mode: {'ON' if self.verbose_mode else 'OFF'}"
-        elif self.menu_selected == 2:
-            self.signal_targeting = not self.signal_targeting
-            self.status_message = f"Signal targeting: {'ON' if self.signal_targeting else 'OFF'}"
 
-    # ---- Engine Control Methods ----
+    def _set_monitor_iface(self, value):
+        """Set monitor interface."""
+        if value:
+            self.monitor_iface = value
+
+    def _set_ap_iface(self, value):
+        """Set AP interface."""
+        if value:
+            self.ap_iface = value
+
+    def _set_rssi_limit(self, value):
+        """Set RSSI limit."""
+        try:
+            self.rssi_limit = int(value)
+        except ValueError:
+            pass
+
+    def _set_recon_duration(self, value):
+        """Set recon duration."""
+        try:
+            self.recon_duration = int(value)
+        except ValueError:
+            pass
+
+    # ================================================================
+    # AUTOPWN
+    # ================================================================
+
+    def _start_autopwn(self):
+        """Start AutoPwn autonomous mode."""
+        if AutoPwnEngine is None:
+            self.status_message = "AutoPwn module not available"
+            return
+
+        try:
+            config = AutoPwnConfig() if AutoPwnConfig else None
+            self.autopwn_engine = AutoPwnEngine(config=config)
+            self.autopwn_running = True
+            self.autopwn_state = "SCANNING"
+
+            # Run async engine in background thread
+            def _run_autopwn():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.autopwn_engine.start())
+                except Exception as e:
+                    self.autopwn_state = "FAILED"
+                    self.status_message = f"AutoPwn error: {e}"
+                finally:
+                    self.autopwn_running = False
+
+            t = threading.Thread(target=_run_autopwn, daemon=True)
+            t.start()
+            self.status_message = "AutoPwn started"
+        except Exception as e:
+            self.status_message = f"AutoPwn error: {e}"
+            self.autopwn_running = False
+
+    def _stop_autopwn(self):
+        """Stop AutoPwn mode."""
+        if self.autopwn_engine:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.autopwn_engine.stop())
+            except Exception:
+                pass
+        self.autopwn_running = False
+        self.autopwn_state = "IDLE"
+        self.status_message = "AutoPwn stopped"
+
+    # ================================================================
+    # DATA ACCESS METHODS
+    # ================================================================
+
+    def _get_access_points(self) -> List[Dict]:
+        """Get access points from database sorted by current sort mode."""
+        try:
+            aps = self.db.get_access_points() if hasattr(self.db, 'get_access_points') else []
+            if not aps:
+                return []
+
+            # Normalize to list of dicts
+            ap_list = []
+            for ap in aps:
+                if isinstance(ap, dict):
+                    ap_list.append(ap)
+                elif hasattr(ap, '__dict__'):
+                    ap_list.append(vars(ap))
+                elif isinstance(ap, (list, tuple)):
+                    ap_list.append({
+                        "bssid": ap[0] if len(ap) > 0 else "",
+                        "ssid": ap[1] if len(ap) > 1 else "",
+                        "channel": ap[2] if len(ap) > 2 else 0,
+                        "security": ap[3] if len(ap) > 3 else "",
+                        "rssi": ap[4] if len(ap) > 4 else -100,
+                        "vendor": ap[5] if len(ap) > 5 else "",
+                        "is_pos": ap[6] if len(ap) > 6 else False,
+                        "client_count": ap[7] if len(ap) > 7 else 0,
+                    })
+
+            # Apply sorting
+            sort_key = SORT_MODES[self.sort_mode]
+            reverse = True
+            if sort_key == "rssi":
+                ap_list.sort(key=lambda x: x.get("rssi", -100), reverse=True)
+            elif sort_key == "security":
+                ap_list.sort(key=lambda x: x.get("security", ""), reverse=False)
+            elif sort_key == "pos":
+                ap_list.sort(key=lambda x: x.get("is_pos", False), reverse=True)
+            elif sort_key == "channel":
+                ap_list.sort(key=lambda x: x.get("channel", 0))
+            elif sort_key == "clients":
+                ap_list.sort(key=lambda x: x.get("client_count", 0), reverse=True)
+            elif sort_key == "ssid":
+                ap_list.sort(key=lambda x: x.get("ssid", "").lower())
+
+            # Apply filter
+            if self.filter_text:
+                ft = self.filter_text.lower()
+                ap_list = [ap for ap in ap_list if
+                           ft in ap.get("ssid", "").lower() or
+                           ft in ap.get("bssid", "").lower() or
+                           ft in ap.get("vendor", "").lower()]
+
+            return ap_list
+        except Exception:
+            return []
+
+    def _get_clients(self) -> List[Dict]:
+        """Get clients with profile data."""
+        try:
+            clients = self.db.get_clients() if hasattr(self.db, 'get_clients') else []
+            if not clients:
+                return []
+
+            client_list = []
+            for c in clients:
+                if isinstance(c, dict):
+                    client_list.append(c)
+                elif hasattr(c, '__dict__'):
+                    client_list.append(vars(c))
+                elif isinstance(c, (list, tuple)):
+                    client_list.append({
+                        "mac": c[0] if len(c) > 0 else "",
+                        "vendor": c[1] if len(c) > 1 else "",
+                        "associated_ap": c[2] if len(c) > 2 else "",
+                        "rssi": c[3] if len(c) > 3 else -100,
+                    })
+
+            # Enrich with profiler data
+            if self.client_profiler:
+                for client in client_list:
+                    mac = client.get("mac", "")
+                    if mac:
+                        profile = self.client_profiler.get_profile(mac)
+                        if profile:
+                            client["os"] = profile.get("os", "")
+                            client["device_type"] = profile.get("device_type", "")
+
+            # Apply filter
+            if self.filter_text:
+                ft = self.filter_text.lower()
+                client_list = [c for c in client_list if
+                               ft in c.get("mac", "").lower() or
+                               ft in c.get("vendor", "").lower() or
+                               ft in c.get("associated_ap", "").lower()]
+
+            return client_list
+        except Exception:
+            return []
+
+    def _get_credentials_count(self) -> int:
+        """Get total credentials discovered."""
+        try:
+            if hasattr(self.db, 'get_credentials'):
+                creds = self.db.get_credentials()
+                return len(creds) if creds else 0
+            return 0
+        except Exception:
+            return 0
+
+    def _get_decryption_feed(self) -> List[Dict]:
+        """Get live decrypted traffic from harvester session."""
+        feed = []
+        if self.harvester_session and self.harvester_running:
+            try:
+                summary = self.harvester_session.get_decrypted_summary()
+                # DNS queries
+                for dns in summary.get("dns_queries", []):
+                    feed.append({
+                        "time": dns.get("timestamp", "")[:8] if isinstance(dns, dict) else "",
+                        "proto": "DNS",
+                        "data": dns.get("query", str(dns)) if isinstance(dns, dict) else str(dns),
+                    })
+                # HTTP requests
+                for http in summary.get("http_requests", []):
+                    feed.append({
+                        "time": http.get("timestamp", "")[:8] if isinstance(http, dict) else "",
+                        "proto": "HTTP",
+                        "data": http.get("url", http.get("host", str(http))) if isinstance(http, dict) else str(http),
+                    })
+                # DHCP leases
+                for dhcp in summary.get("dhcp_leases", []):
+                    feed.append({
+                        "time": dhcp.get("timestamp", "")[:8] if isinstance(dhcp, dict) else "",
+                        "proto": "DHCP",
+                        "data": dhcp.get("ip", str(dhcp)) if isinstance(dhcp, dict) else str(dhcp),
+                    })
+                # EAPOL events
+                for eapol in summary.get("eapol_events", []):
+                    feed.append({
+                        "time": eapol.get("timestamp", "")[:8] if isinstance(eapol, dict) else "",
+                        "proto": "EAPOL",
+                        "data": eapol.get("type", str(eapol)) if isinstance(eapol, dict) else str(eapol),
+                    })
+                # Credentials
+                for cred in summary.get("credentials", []):
+                    feed.append({
+                        "time": cred.get("timestamp", "")[:8] if isinstance(cred, dict) else "",
+                        "proto": "CRED",
+                        "data": cred.get("username", str(cred)) if isinstance(cred, dict) else str(cred),
+                    })
+            except Exception:
+                pass
+        return feed
+
+    def _get_harvester_findings(self) -> List[Dict]:
+        """Get pyWhat findings from the analyzer."""
+        if self.pywhat_analyzer:
+            try:
+                findings = self.pywhat_analyzer.findings
+                if findings:
+                    return findings
+            except Exception:
+                pass
+
+        # Also check pywhat_callback
+        if self.pywhat_callback:
+            try:
+                findings = self.pywhat_callback.analyzer.findings
+                if findings:
+                    return findings
+            except Exception:
+                pass
+
+        return self.harvester_findings
+
+    def _get_attack_surfaces(self) -> Dict[str, List]:
+        """Get attack surfaces grouped by category from PyWhatAnalyzer."""
+        if self.pywhat_analyzer:
+            try:
+                return self.pywhat_analyzer.get_attack_surfaces()
+            except Exception:
+                pass
+        return {}
+
+    def _get_handshakes(self) -> List[Dict]:
+        """Get captured handshakes for cracking."""
+        handshakes = []
+        try:
+            if hasattr(self.db, 'get_handshakes'):
+                hs = self.db.get_handshakes()
+                if hs:
+                    for h in hs:
+                        if isinstance(h, dict):
+                            handshakes.append(h)
+                        elif hasattr(h, '__dict__'):
+                            handshakes.append(vars(h))
+        except Exception:
+            pass
+        return handshakes or self.captured_handshakes
+
+    def _get_sessions(self) -> List[Dict]:
+        """Get session hijacker data."""
+        sessions = []
+        engine = self.cred_attacks.get("session")
+        if engine and engine.engine:
+            try:
+                if hasattr(engine.engine, 'get_sessions'):
+                    sessions = engine.engine.get_sessions()
+            except Exception:
+                pass
+        return sessions
+
+    # ================================================================
+    # UTILITY / MAX ITEMS
+    # ================================================================
+
+    def _get_max_menu_items(self) -> int:
+        """Get the maximum number of selectable items for the current tab."""
+        tab = TABS[self.active_tab]
+        if tab == "Targets":
+            if self.target_view == "ap":
+                return max(1, len(self._get_access_points()))
+            else:
+                return max(1, len(self._get_clients()))
+        elif tab == "WiFi Attacks":
+            return len(self.wifi_attacks)
+        elif tab == "Cred Attacks":
+            return len(self.cred_attacks)
+        elif tab == "MITM":
+            return len(self.mitm_attacks)
+        elif tab == "Network":
+            return len(self.network_modules)
+        elif tab == "BLE/SDR":
+            return len(self.ble_sdr_modules)
+        elif tab == "Harvester":
+            return 3
+        elif tab == "Cracking":
+            return 5
+        elif tab == "Settings":
+            return 24
+        return 1
+
+    def _apply_filter(self, text):
+        """Apply text filter."""
+        self.filter_text = text
+        self.status_message = f"Filter: {text}" if text else "Filter cleared"
+
+    # ================================================================
+    # EXPORT METHODS
+    # ================================================================
+
+    def _export_targets(self):
+        """Export discovered targets to JSON."""
+        data = {
+            "access_points": self._get_access_points(),
+            "clients": self._get_clients(),
+            "timestamp": datetime.now().isoformat(),
+        }
+        filepath = f"posframework_targets_{int(time.time())}.json"
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+        self.status_message = f"Exported to {filepath}"
+
+    def _export_findings(self):
+        """Export harvester findings to JSON."""
+        data = {
+            "findings": self._get_harvester_findings(),
+            "attack_surfaces": self._get_attack_surfaces(),
+            "decryption_feed": self._get_decryption_feed(),
+            "timestamp": datetime.now().isoformat(),
+        }
+        filepath = f"posframework_findings_{int(time.time())}.json"
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+        self.status_message = f"Exported to {filepath}"
+
+    def _export_handshakes(self):
+        """Export handshakes to JSON."""
+        data = {
+            "handshakes": self._get_handshakes(),
+            "timestamp": datetime.now().isoformat(),
+        }
+        filepath = f"posframework_handshakes_{int(time.time())}.json"
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+        self.status_message = f"Exported to {filepath}"
+
+    # ================================================================
+    # RECON CONTROL
+    # ================================================================
 
     def _start_recon(self):
-        """Start recon engine in background thread."""
-        if not SCAPY_AVAILABLE:
-            self.status_message = "Scapy not available - cannot start recon"
+        """Start the recon engine."""
+        if ReconEngine is None:
+            self.status_message = "Recon not available (scapy missing)"
             return
         try:
-            self.recon_engine = ReconEngine(
-                self.monitor_iface, self.db, channels=self.channels
-            )
-            if self.verbose_mode:
-                self.recon_engine.enable_verbose()
+            if self.recon_engine is None:
+                self.recon_engine = ReconEngine(
+                    db=self.db,
+                    interface=self.monitor_iface,
+                    channels=self.channels,
+                )
+            self.recon_engine.start()
             self.recon_running = True
-            self.status_message = f"Recon started on {self.monitor_iface} ({len(self.channels)} channels)"
-            threading.Thread(target=self._recon_thread, daemon=True).start()
+            self.status_message = "Recon started"
         except Exception as e:
             self.status_message = f"Recon error: {e}"
-            self.recon_running = False
-
-    def _recon_thread(self):
-        """Background thread for recon."""
-        try:
-            self.recon_engine.start()
-        except Exception as e:
-            self.status_message = f"Recon failed: {e}"
-        finally:
-            self.recon_running = False
 
     def _stop_recon(self):
-        """Stop recon engine."""
-        if self.recon_engine:
+        """Stop the recon engine."""
+        if self.recon_engine and self.recon_running:
             try:
                 self.recon_engine.stop()
             except Exception:
@@ -483,996 +2473,54 @@ class TerminalUI:
             self.recon_running = False
             self.status_message = "Recon stopped"
 
-    def _auto_target(self):
-        """Auto-select the strongest POS AP as attack target."""
-        try:
-            ap = self.db.get_strongest_pos_ap()
-            if ap:
-                self.attack_target_bssid = ap[0] if isinstance(ap, (list, tuple)) else ""
-                self.status_message = f"Auto-target: {self.attack_target_bssid}"
-            else:
-                # Fall back to strongest AP
-                ap = self.db.get_strongest_ap()
-                if ap:
-                    self.attack_target_bssid = ap[0] if isinstance(ap, (list, tuple)) else ""
-                    self.status_message = f"Auto-target (non-POS): {self.attack_target_bssid}"
-                else:
-                    self.status_message = "No targets found - run recon first"
-        except Exception as e:
-            self.status_message = f"Auto-target error: {e}"
+    # ================================================================
+    # CLEANUP
+    # ================================================================
 
-    def _start_attack(self):
-        """Start attack orchestrator in background thread."""
-        try:
-            self.attack_orchestrator = AttackOrchestrator(
-                monitor_iface=self.monitor_iface,
-                ap_iface=self.ap_iface,
-                channels=self.channels,
-                target_bssid=self.attack_target_bssid or None,
-                recon_duration=self.recon_duration,
-                enable_beacons=self.attack_modules.get("beacons", True),
-                enable_karma=self.attack_modules.get("karma", True),
-                enable_isolation_check=True,
-                signal_rssi_limit=self.rssi_limit,
-                test_credentials=False,
-                enable_ap_clone=self.attack_modules.get("ap_clone", False),
-                enable_krack=self.attack_modules.get("krack", False),
-                enable_dos=self.attack_modules.get("dos", False),
-                dos_mode=self.dos_mode,
-                enable_client_isolation=self.attack_modules.get("client_isolation", False),
-                enable_printer_attacks=self.attack_modules.get("printer_attacks", False),
-            )
-            self.attack_running = True
-            self.status_message = "Attack started..."
-            threading.Thread(target=self._attack_thread, daemon=True).start()
-        except Exception as e:
-            self.status_message = f"Attack error: {e}"
-            self.attack_running = False
-
-    def _attack_thread(self):
-        """Background thread for attack."""
-        try:
-            if self.attack_orchestrator.start():
-                while self.attack_orchestrator.running and self.attack_running:
-                    time.sleep(1)
-        except Exception as e:
-            self.status_message = f"Attack failed: {e}"
-        finally:
-            self.attack_running = False
-
-    def _stop_attack(self):
-        """Stop attack orchestrator."""
-        if self.attack_orchestrator:
+    def _cleanup(self):
+        """Stop all running engines on exit."""
+        # Stop recon
+        if self.recon_engine and self.recon_running:
             try:
-                self.attack_orchestrator.stop()
-            except Exception:
-                pass
-            self.attack_running = False
-            self.status_message = "Attack stopped"
-
-    def _start_mitm(self):
-        """Start MITM engine in background thread."""
-        if not self.mitm_target_ip or not self.mitm_gateway_ip:
-            self.status_message = "MITM requires target IP and gateway IP (set in Settings)"
-            return
-        try:
-            self.mitm_engine = MITMEngine(
-                interface=self.monitor_iface,
-                target_ip=self.mitm_target_ip,
-                gateway_ip=self.mitm_gateway_ip,
-            )
-            self.mitm_running = True
-            self.status_message = f"MITM started: {self.mitm_target_ip} -> {self.mitm_gateway_ip}"
-            threading.Thread(target=self._mitm_thread, daemon=True).start()
-        except Exception as e:
-            self.status_message = f"MITM error: {e}"
-            self.mitm_running = False
-
-    def _mitm_thread(self):
-        """Background thread for MITM."""
-        try:
-            self.mitm_engine.start()
-        except Exception as e:
-            self.status_message = f"MITM failed: {e}"
-        finally:
-            self.mitm_running = False
-
-    def _stop_mitm(self):
-        """Stop MITM engine."""
-        if self.mitm_engine:
-            try:
-                self.mitm_engine.stop()
-            except Exception:
-                pass
-            self.mitm_running = False
-            self.status_message = "MITM stopped"
-
-    def _start_printer_recon(self):
-        """Start printer reconnaissance."""
-        try:
-            self.printer_scanner = PrinterRecon(interface=self.monitor_iface)
-            self.printer_running = True
-            self.status_message = "Printer recon started..."
-            threading.Thread(target=self._printer_thread, daemon=True).start()
-        except Exception as e:
-            self.status_message = f"Printer recon error: {e}"
-            self.printer_running = False
-
-    def _printer_thread(self):
-        """Background thread for printer recon."""
-        try:
-            self.printer_scanner.scan()
-        except Exception as e:
-            self.status_message = f"Printer recon failed: {e}"
-        finally:
-            self.printer_running = False
-
-    def _stop_printer_recon(self):
-        """Stop printer recon."""
-        if self.printer_scanner:
-            try:
-                self.printer_scanner.stop()
-            except Exception:
-                pass
-            self.printer_running = False
-            self.status_message = "Printer recon stopped"
-
-    def _export_credentials(self):
-        """Export credentials to JSON file."""
-        try:
-            from .post_attack import PostAttackAnalyzer
-            analyzer = PostAttackAnalyzer(self.db)
-            analyzer.export_credentials("exports/credentials.json")
-            self.status_message = "Credentials exported to exports/credentials.json"
-        except Exception as e:
-            self.status_message = f"Export error: {e}"
-
-    # ---- Drawing Methods ----
-
-    def _draw(self, stdscr):
-        """Draw the complete UI."""
-        stdscr.erase()
-        height, width = stdscr.getmaxyx()
-
-        if height < 10 or width < 40:
-            try:
-                stdscr.addstr(0, 0, "Terminal too small. Resize to at least 40x10.")
-            except curses.error:
-                pass
-            stdscr.refresh()
-            return
-
-        # Draw header
-        self._draw_header(stdscr, width)
-
-        # Draw tab bar
-        self._draw_tabs(stdscr, width)
-
-        # Calculate layout
-        content_start = 3
-        status_height = 2
-        log_height = min(10, max(4, (height - content_start - status_height) // 3)) if self.show_log_panel else 0
-        content_end = height - status_height - log_height
-        content_height = content_end - content_start
-
-        # Draw main content area
-        if content_height > 0:
-            self._draw_content(stdscr, content_start, content_height, width)
-
-        # Draw log panel
-        if self.show_log_panel and log_height > 0:
-            log_start = content_end
-            log_end = height - status_height
-            self._draw_log_panel(stdscr, log_start, log_end, width)
-
-        # Draw status bar
-        self._draw_status_bar(stdscr, height, width)
-
-        stdscr.refresh()
-
-    def _draw_header(self, stdscr, width):
-        """Draw the title header."""
-        title = f" POSFramework v{VERSION} - Terminal UI "
-        try:
-            stdscr.addstr(0, 0, " " * (width - 1), curses.color_pair(COLOR_STATUS))
-            x = max(0, (width - len(title)) // 2)
-            stdscr.addstr(0, x, title[:width - 1], curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
-        except curses.error:
-            pass
-
-    def _draw_tabs(self, stdscr, width):
-        """Draw the tab bar."""
-        x = 0
-        for i, tab_name in enumerate(TABS):
-            label = f" {i + 1}:{tab_name} "
-            if i == self.active_tab:
-                attr = curses.color_pair(COLOR_TAB_ACTIVE) | curses.A_BOLD
-            else:
-                attr = curses.color_pair(COLOR_TAB_INACTIVE)
-            try:
-                if x + len(label) < width:
-                    stdscr.addstr(1, x, label, attr)
-            except curses.error:
-                pass
-            x += len(label) + 1
-
-        # Draw separator line
-        try:
-            sep = "-" * (width - 1)
-            stdscr.addstr(2, 0, sep, curses.color_pair(COLOR_HEADER))
-        except curses.error:
-            pass
-
-    def _draw_content(self, stdscr, start_y, height, width):
-        """Draw the main content for the active tab."""
-        tab = TABS[self.active_tab]
-        if tab == "Recon":
-            self._draw_recon_tab(stdscr, start_y, height, width)
-        elif tab == "Attack":
-            self._draw_attack_tab(stdscr, start_y, height, width)
-        elif tab == "MITM":
-            self._draw_mitm_tab(stdscr, start_y, height, width)
-        elif tab == "Credentials":
-            self._draw_cred_tab(stdscr, start_y, height, width)
-        elif tab == "Printers":
-            self._draw_printer_tab(stdscr, start_y, height, width)
-        elif tab == "Settings":
-            self._draw_settings_tab(stdscr, start_y, height, width)
-
-    def _safe_addstr(self, stdscr, y, x, text, attr=curses.A_NORMAL):
-        """Safely add a string to the screen, ignoring errors."""
-        try:
-            height, width = stdscr.getmaxyx()
-            if y < height and x < width:
-                stdscr.addstr(y, x, text[:width - x - 1], attr)
-        except curses.error:
-            pass
-
-    def _draw_menu_item(self, stdscr, y, width, idx, text, is_checkbox=False, checked=False):
-        """Draw a menu item with selection highlighting."""
-        is_selected = (idx == self.menu_selected)
-        if is_checkbox:
-            prefix = "[X] " if checked else "[ ] "
-        else:
-            prefix = ""
-        marker = "> " if is_selected else "  "
-        full_text = marker + prefix + text
-
-        attr = curses.color_pair(COLOR_SELECTED) if is_selected else curses.A_NORMAL
-        self._safe_addstr(stdscr, y, 1, full_text, attr)
-
-    def _draw_recon_tab(self, stdscr, start_y, height, width):
-        """Draw the Recon tab content."""
-        y = start_y
-
-        # -- Controls Section --
-        self._safe_addstr(stdscr, y, 1, "Recon Controls:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-
-        # Menu items
-        status_text = "Stop Recon" if self.recon_running else "Start Recon"
-        self._draw_menu_item(stdscr, y, width, 0, f"[Enter] {status_text}")
-        y += 1
-        self._draw_menu_item(stdscr, y, width, 1, "[Enter] Clear Display")
-        y += 1
-        self._draw_menu_item(stdscr, y, width, 2,
-                             f"Verbose Mode: {'ON' if self.verbose_mode else 'OFF'}",
-                             is_checkbox=True, checked=self.verbose_mode)
-        y += 1
-        self._draw_menu_item(stdscr, y, width, 3,
-                             f"Signal Targeting: {'ON' if self.signal_targeting else 'OFF'}",
-                             is_checkbox=True, checked=self.signal_targeting)
-        y += 1
-        self._draw_menu_item(stdscr, y, width, 4,
-                             f"5GHz Channels: {'ON' if self.use_5ghz else 'OFF'}",
-                             is_checkbox=True, checked=self.use_5ghz)
-        y += 1
-
-        # Status indicator
-        y += 1
-        recon_status = "SCANNING" if self.recon_running else "IDLE"
-        color = COLOR_SUCCESS if self.recon_running else COLOR_WARNING
-        self._safe_addstr(stdscr, y, 1, f"Status: {recon_status}  |  "
-                          f"Interface: {self.monitor_iface}  |  "
-                          f"Channels: {len(self.channels)}",
-                          curses.color_pair(color) | curses.A_BOLD)
-        y += 2
-
-        # -- AP Table --
-        self._safe_addstr(stdscr, y, 1, "Discovered Access Points:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-
-        header = f"{'BSSID':<18} {'SSID':<22} {'CH':<4} {'SEC':<8} {'RSSI':<6} {'VENDOR':<15} {'POS':<4}"
-        self._safe_addstr(stdscr, y, 1, header[:width - 2],
-                          curses.color_pair(COLOR_HEADER) | curses.A_UNDERLINE)
-        y += 1
-
-        # Fetch APs from database
-        aps = self._get_access_points()
-        for ap in aps:
-            if y >= start_y + height - 6:
-                break
-            bssid = ap.get("bssid", "??:??:??:??:??:??")[:17]
-            ssid = (ap.get("ssid") or "<hidden>")[:21]
-            channel = str(ap.get("channel", "?"))[:3]
-            security = (ap.get("security") or "Open")[:7]
-            rssi = str(ap.get("rssi", "?"))[:5]
-            vendor = (ap.get("vendor") or "Unknown")[:14]
-            pos_flag = "YES" if ap.get("is_pos") else " - "
-            line = f"{bssid:<18} {ssid:<22} {channel:<4} {security:<8} {rssi:<6} {vendor:<15} {pos_flag:<4}"
-
-            color = COLOR_SUCCESS if ap.get("is_pos") else COLOR_NORMAL
-            self._safe_addstr(stdscr, y, 1, line[:width - 2], curses.color_pair(color))
-            y += 1
-
-        if not aps:
-            self._safe_addstr(stdscr, y, 1, "  No access points discovered yet. Start recon to scan.",
-                              curses.color_pair(COLOR_WARNING))
-            y += 1
-
-        # -- Client Table --
-        y += 1
-        if y < start_y + height - 3:
-            self._safe_addstr(stdscr, y, 1, "Discovered Clients:",
-                              curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-            y += 1
-
-            client_header = f"{'MAC':<18} {'VENDOR':<15} {'ASSOCIATED AP':<18} {'RSSI':<6} {'POS':<4}"
-            self._safe_addstr(stdscr, y, 1, client_header[:width - 2],
-                              curses.color_pair(COLOR_HEADER) | curses.A_UNDERLINE)
-            y += 1
-
-            clients = self._get_clients()
-            for client in clients:
-                if y >= start_y + height - 1:
-                    break
-                mac = client.get("mac", "??:??:??:??:??:??")[:17]
-                vendor = (client.get("vendor") or "Unknown")[:14]
-                assoc = (client.get("associated_ap") or "None")[:17]
-                rssi = str(client.get("rssi", "?"))[:5]
-                pos_flag = "YES" if client.get("is_pos") else " - "
-                line = f"{mac:<18} {vendor:<15} {assoc:<18} {rssi:<6} {pos_flag:<4}"
-                color = COLOR_SUCCESS if client.get("is_pos") else COLOR_NORMAL
-                self._safe_addstr(stdscr, y, 1, line[:width - 2], curses.color_pair(color))
-                y += 1
-
-            if not clients:
-                self._safe_addstr(stdscr, y, 1, "  No clients discovered yet.",
-                                  curses.color_pair(COLOR_WARNING))
-
-    def _draw_attack_tab(self, stdscr, start_y, height, width):
-        """Draw the Attack tab content."""
-        y = start_y
-
-        # -- Controls --
-        self._safe_addstr(stdscr, y, 1, "Attack Configuration:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-
-        # Start/Stop
-        status_text = "Stop Attack" if self.attack_running else "Start Attack"
-        self._draw_menu_item(stdscr, y, width, 0, f"[Enter] {status_text}")
-        y += 1
-
-        # Auto-target
-        target_display = self.attack_target_bssid or "(auto-select strongest)"
-        self._draw_menu_item(stdscr, y, width, 1, f"[Enter] Auto-Target  [{target_display}]")
-        y += 1
-
-        # Attack modules
-        y += 1
-        self._safe_addstr(stdscr, y, 1, "Attack Modules (Space to toggle):",
-                          curses.color_pair(COLOR_ACCENT))
-        y += 1
-
-        module_labels = [
-            ("deauth", "Deauthentication"),
-            ("beacons", "Known Beacons"),
-            ("karma", "KARMA"),
-            ("rogue_ap", "Rogue AP"),
-            ("ap_clone", "AP Clone (Evil Twin)"),
-            ("krack", "KRACK"),
-            ("dos", "WiFi DoS"),
-            ("client_isolation", "Client Isolation"),
-            ("printer_attacks", "Printer Attacks"),
-        ]
-
-        for i, (key, label) in enumerate(module_labels):
-            if y >= start_y + height - 4:
-                break
-            checked = self.attack_modules.get(key, False)
-            self._draw_menu_item(stdscr, y, width, i + 2, label,
-                                 is_checkbox=True, checked=checked)
-            y += 1
-
-        # DoS mode and RSSI info
-        y += 1
-        if y < start_y + height - 2:
-            self._safe_addstr(stdscr, y, 1,
-                              f"DoS Mode: {self.dos_mode}  |  RSSI Limit: {self.rssi_limit} dBm  |  "
-                              f"Recon Duration: {self.recon_duration}s",
-                              curses.color_pair(COLOR_NORMAL))
-            y += 1
-
-        # Status
-        y += 1
-        if y < start_y + height - 1:
-            atk_status = "ATTACKING" if self.attack_running else "IDLE"
-            color = COLOR_ERROR if self.attack_running else COLOR_WARNING
-            self._safe_addstr(stdscr, y, 1, f"Status: {atk_status}",
-                              curses.color_pair(color) | curses.A_BOLD)
-
-        if not SCAPY_AVAILABLE and y + 1 < start_y + height:
-            y += 1
-            self._safe_addstr(stdscr, y, 1,
-                              "WARNING: Scapy not available - install scapy for attack features",
-                              curses.color_pair(COLOR_ERROR))
-
-    def _draw_mitm_tab(self, stdscr, start_y, height, width):
-        """Draw the MITM tab content."""
-        y = start_y
-
-        self._safe_addstr(stdscr, y, 1, "MITM Attack Configuration:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-
-        # Start/Stop
-        status_text = "Stop MITM" if self.mitm_running else "Start MITM"
-        self._draw_menu_item(stdscr, y, width, 0, f"[Enter] {status_text}")
-        y += 1
-
-        # Target info
-        target_display = self.mitm_target_ip or "(not set)"
-        gateway_display = self.mitm_gateway_ip or "(not set)"
-        self._draw_menu_item(stdscr, y, width, 1,
-                             f"Target: {target_display}  Gateway: {gateway_display}")
-        y += 1
-
-        # MITM modules
-        y += 1
-        self._safe_addstr(stdscr, y, 1, "MITM Modules (Space to toggle):",
-                          curses.color_pair(COLOR_ACCENT))
-        y += 1
-
-        mitm_labels = [
-            ("arp_poison", "ARP Poison"),
-            ("ssl_strip", "SSL Strip"),
-            ("dns_spoof", "DNS Spoof"),
-            ("cred_harvest", "Credential Harvest"),
-        ]
-
-        for i, (key, label) in enumerate(mitm_labels):
-            if y >= start_y + height - 4:
-                break
-            checked = self.mitm_modules.get(key, False)
-            self._draw_menu_item(stdscr, y, width, i + 2, label,
-                                 is_checkbox=True, checked=checked)
-            y += 1
-
-        # Status
-        y += 2
-        if y < start_y + height - 1:
-            mitm_status = "ACTIVE" if self.mitm_running else "IDLE"
-            color = COLOR_ERROR if self.mitm_running else COLOR_WARNING
-            self._safe_addstr(stdscr, y, 1, f"Status: {mitm_status}",
-                              curses.color_pair(color) | curses.A_BOLD)
-            y += 1
-
-        # Intercepted traffic placeholder
-        y += 1
-        if y < start_y + height - 2:
-            self._safe_addstr(stdscr, y, 1, "Intercepted Traffic:",
-                              curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-            y += 1
-            traffic_header = f"{'SOURCE':<16} {'DEST':<16} {'PROTO':<8} {'DATA':<30}"
-            self._safe_addstr(stdscr, y, 1, traffic_header[:width - 2],
-                              curses.color_pair(COLOR_HEADER) | curses.A_UNDERLINE)
-            y += 1
-            if not self.mitm_running:
-                self._safe_addstr(stdscr, y, 1, "  Start MITM to capture traffic",
-                                  curses.color_pair(COLOR_WARNING))
-
-    def _draw_cred_tab(self, stdscr, start_y, height, width):
-        """Draw the Credentials tab content."""
-        y = start_y
-
-        self._safe_addstr(stdscr, y, 1, "Captured Credentials:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-
-        # Controls
-        self._draw_menu_item(stdscr, y, width, 0, "[Enter] Refresh")
-        y += 1
-        self._draw_menu_item(stdscr, y, width, 1, "[Enter] Export to JSON")
-        y += 1
-        self._draw_menu_item(stdscr, y, width, 2, "[Enter] Clear All")
-        y += 2
-
-        # Credential count
-        cred_count = self._get_credential_count()
-        self._safe_addstr(stdscr, y, 1, f"Total Credentials: {cred_count}",
-                          curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
-        y += 2
-
-        # Credentials table
-        header = f"{'TIMESTAMP':<12} {'SOURCE IP':<16} {'USERNAME':<18} {'PASSWORD':<18} {'URL':<20} {'PROTO':<8}"
-        self._safe_addstr(stdscr, y, 1, header[:width - 2],
-                          curses.color_pair(COLOR_HEADER) | curses.A_UNDERLINE)
-        y += 1
-
-        creds = self._get_credentials()
-        for cred in creds:
-            if y >= start_y + height - 1:
-                break
-            timestamp = cred.get("timestamp", "?")[:11]
-            source_ip = cred.get("source_ip", "?")[:15]
-            user = cred.get("username", "?")[:17]
-            password = cred.get("password", "****")[:17]
-            url = cred.get("url", "?")[:19]
-            protocol = cred.get("protocol", "?")[:7]
-            line = f"{timestamp:<12} {source_ip:<16} {user:<18} {password:<18} {url:<20} {protocol:<8}"
-            self._safe_addstr(stdscr, y, 1, line[:width - 2], curses.color_pair(COLOR_SUCCESS))
-            y += 1
-
-        if not creds:
-            self._safe_addstr(stdscr, y, 1, "  No credentials captured yet. Run attack or MITM to harvest.",
-                              curses.color_pair(COLOR_WARNING))
-
-    def _draw_printer_tab(self, stdscr, start_y, height, width):
-        """Draw the Printers tab content."""
-        y = start_y
-
-        self._safe_addstr(stdscr, y, 1, "Printer Reconnaissance:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-
-        # Controls
-        status_text = "Stop Printer Recon" if self.printer_running else "Start Printer Recon"
-        self._draw_menu_item(stdscr, y, width, 0, f"[Enter] {status_text}")
-        y += 1
-        self._draw_menu_item(stdscr, y, width, 1, "[Enter] Refresh Results")
-        y += 1
-
-        # Status
-        printer_status = "SCANNING" if self.printer_running else "IDLE"
-        color = COLOR_SUCCESS if self.printer_running else COLOR_WARNING
-        self._safe_addstr(stdscr, y, 1, f"Status: {printer_status}",
-                          curses.color_pair(color) | curses.A_BOLD)
-        y += 2
-
-        # -- Discovered Printers Table --
-        self._safe_addstr(stdscr, y, 1, "Discovered Printers:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-
-        p_header = f"{'IP':<16} {'MODEL':<15} {'MANUFACTURER':<14} {'HOSTNAME':<14} {'FW':<10} {'DEF CREDS':<10} {'VULNS':<5}"
-        self._safe_addstr(stdscr, y, 1, p_header[:width - 2],
-                          curses.color_pair(COLOR_HEADER) | curses.A_UNDERLINE)
-        y += 1
-
-        printers = self._get_printers()
-        for p in printers:
-            if y >= start_y + height - 10:
-                break
-            ip = p.get("ip", "?")[:15]
-            model = p.get("model", "?")[:14]
-            mfg = p.get("manufacturer", "?")[:13]
-            hostname = p.get("hostname", "?")[:13]
-            fw = p.get("firmware", "?")[:9]
-            def_creds = "YES" if p.get("default_creds") else "No"
-            vulns = str(p.get("vulns", 0))[:4]
-            line = f"{ip:<16} {model:<15} {mfg:<14} {hostname:<14} {fw:<10} {def_creds:<10} {vulns:<5}"
-            color = COLOR_ERROR if p.get("default_creds") else COLOR_NORMAL
-            self._safe_addstr(stdscr, y, 1, line[:width - 2], curses.color_pair(color))
-            y += 1
-
-        if not printers:
-            self._safe_addstr(stdscr, y, 1, "  No printers discovered yet.",
-                              curses.color_pair(COLOR_WARNING))
-            y += 1
-
-        # -- Print Jobs Table --
-        y += 1
-        if y < start_y + height - 5:
-            self._safe_addstr(stdscr, y, 1, "Intercepted Print Jobs:",
-                              curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-            y += 1
-
-            j_header = f"{'TIMESTAMP':<12} {'PRINTER IP':<16} {'SOURCE':<16} {'DOCUMENT':<20} {'TYPE':<8} {'PAGES':<5}"
-            self._safe_addstr(stdscr, y, 1, j_header[:width - 2],
-                              curses.color_pair(COLOR_HEADER) | curses.A_UNDERLINE)
-            y += 1
-
-            jobs = self._get_print_jobs()
-            for j in jobs:
-                if y >= start_y + height - 4:
-                    break
-                ts = j.get("timestamp", "?")[:11]
-                pip = j.get("printer_ip", "?")[:15]
-                src = j.get("source", "?")[:15]
-                doc = j.get("document", "?")[:19]
-                dtype = j.get("type", "?")[:7]
-                pages = str(j.get("pages", "?"))[:4]
-                line = f"{ts:<12} {pip:<16} {src:<16} {doc:<20} {dtype:<8} {pages:<5}"
-                self._safe_addstr(stdscr, y, 1, line[:width - 2], curses.color_pair(COLOR_NORMAL))
-                y += 1
-
-            if not jobs:
-                self._safe_addstr(stdscr, y, 1, "  No print jobs intercepted.",
-                                  curses.color_pair(COLOR_WARNING))
-                y += 1
-
-        # -- Printer Credentials Table --
-        y += 1
-        if y < start_y + height - 3:
-            self._safe_addstr(stdscr, y, 1, "Printer Credentials:",
-                              curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-            y += 1
-
-            pc_header = f"{'PRINTER IP':<16} {'PROTOCOL':<10} {'USERNAME':<15} {'PASSWORD':<15}"
-            self._safe_addstr(stdscr, y, 1, pc_header[:width - 2],
-                              curses.color_pair(COLOR_HEADER) | curses.A_UNDERLINE)
-            y += 1
-
-            pcreds = self._get_printer_credentials()
-            for pc in pcreds:
-                if y >= start_y + height - 1:
-                    break
-                pip = pc.get("printer_ip", "?")[:15]
-                proto = pc.get("protocol", "?")[:9]
-                user = pc.get("username", "?")[:14]
-                pw = pc.get("password", "****")[:14]
-                line = f"{pip:<16} {proto:<10} {user:<15} {pw:<15}"
-                self._safe_addstr(stdscr, y, 1, line[:width - 2], curses.color_pair(COLOR_SUCCESS))
-                y += 1
-
-    def _draw_settings_tab(self, stdscr, start_y, height, width):
-        """Draw the Settings tab content."""
-        y = start_y
-
-        # Interface Configuration
-        self._safe_addstr(stdscr, y, 1, "Interface Configuration:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-        self._draw_menu_item(stdscr, y, width, 0,
-                             f"5GHz Scanning: {'ON' if self.use_5ghz else 'OFF'}",
-                             is_checkbox=True, checked=self.use_5ghz)
-        y += 1
-        self._draw_menu_item(stdscr, y, width, 1,
-                             f"Verbose Mode: {'ON' if self.verbose_mode else 'OFF'}",
-                             is_checkbox=True, checked=self.verbose_mode)
-        y += 1
-        self._draw_menu_item(stdscr, y, width, 2,
-                             f"Signal Targeting: {'ON' if self.signal_targeting else 'OFF'}",
-                             is_checkbox=True, checked=self.signal_targeting)
-        y += 2
-
-        # Display current settings (read-only info)
-        self._safe_addstr(stdscr, y, 1, "Current Settings:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-
-        settings_info = [
-            f"  Monitor Interface:  {self.monitor_iface}",
-            f"  AP Interface:       {self.ap_iface}",
-            f"  Database:           {DB_NAME}",
-            f"  Channels:           {len(self.channels)} ({', '.join(str(c) for c in self.channels[:5])}...)",
-            f"  RSSI Limit:         {self.rssi_limit} dBm",
-            f"  DoS Mode:           {self.dos_mode}",
-            f"  Recon Duration:     {self.recon_duration}s",
-        ]
-        for info in settings_info:
-            if y >= start_y + height - 8:
-                break
-            self._safe_addstr(stdscr, y, 1, info, curses.color_pair(COLOR_NORMAL))
-            y += 1
-
-        # MITM Configuration
-        y += 1
-        self._safe_addstr(stdscr, y, 1, "MITM Configuration:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-        self._safe_addstr(stdscr, y, 1,
-                          f"  Target IP:   {self.mitm_target_ip or '(not set)'}",
-                          curses.color_pair(COLOR_NORMAL))
-        y += 1
-        self._safe_addstr(stdscr, y, 1,
-                          f"  Gateway IP:  {self.mitm_gateway_ip or '(not set)'}",
-                          curses.color_pair(COLOR_NORMAL))
-        y += 2
-
-        # System Info
-        self._safe_addstr(stdscr, y, 1, "System Info:",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        y += 1
-
-        platform_str = "Windows" if IS_WINDOWS else "Linux"
-        self._safe_addstr(stdscr, y, 1, f"  Platform:  {platform_str}",
-                          curses.color_pair(COLOR_NORMAL))
-        y += 1
-        self._safe_addstr(stdscr, y, 1, f"  Python:    {sys.version.split()[0]}",
-                          curses.color_pair(COLOR_NORMAL))
-        y += 1
-
-        scapy_text = "Available" if SCAPY_AVAILABLE else "Not Available"
-        scapy_color = COLOR_SUCCESS if SCAPY_AVAILABLE else COLOR_ERROR
-        self._safe_addstr(stdscr, y, 1, "  Scapy:     ", curses.color_pair(COLOR_NORMAL))
-        try:
-            stdscr.addstr(scapy_text, curses.color_pair(scapy_color))
-        except curses.error:
-            pass
-        y += 2
-
-        # About
-        if y < start_y + height - 3:
-            self._safe_addstr(stdscr, y, 1, "About:",
-                              curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-            y += 1
-            self._safe_addstr(stdscr, y, 1,
-                              f"  POSFramework v{VERSION} - WiFi Reconnaissance & Attack Suite",
-                              curses.color_pair(COLOR_ACCENT))
-            y += 1
-            self._safe_addstr(stdscr, y, 1,
-                              "  Comprehensive framework for POS system security testing.",
-                              curses.color_pair(COLOR_NORMAL))
-
-    def _draw_log_panel(self, stdscr, start_y, end_y, width):
-        """Draw the log output panel."""
-        try:
-            sep = "-" * (width - 1)
-            stdscr.addstr(start_y, 0, sep, curses.color_pair(COLOR_HEADER))
-            stdscr.addstr(start_y, 1, "[ Log (L:toggle, C:clear, PgUp/PgDn:scroll) ]",
-                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        except curses.error:
-            pass
-
-        records = self.log_handler.get_records()
-        available_lines = end_y - start_y - 1
-        if available_lines <= 0:
-            return
-
-        # Apply scroll offset
-        total_records = len(records)
-        max_offset = max(0, total_records - available_lines)
-        effective_offset = min(self.scroll_offset, max_offset)
-
-        if effective_offset > 0:
-            display_records = records[-(available_lines + effective_offset):-effective_offset]
-        else:
-            display_records = records[-available_lines:]
-
-        y = start_y + 1
-        for levelno, msg in display_records:
-            if y >= end_y:
-                break
-            if levelno >= logging.ERROR:
-                color = COLOR_ERROR
-            elif levelno >= logging.WARNING:
-                color = COLOR_WARNING
-            elif levelno <= logging.DEBUG:
-                color = COLOR_NORMAL
-            else:
-                color = COLOR_SUCCESS
-            self._safe_addstr(stdscr, y, 1, msg[:width - 2], curses.color_pair(color))
-            y += 1
-
-    def _draw_status_bar(self, stdscr, height, width):
-        """Draw the status bar at the bottom."""
-        try:
-            stats = self.db.get_stats()
-            ap_count = stats.get("access_points", 0)
-            pos_count = stats.get("pos_access_points", 0)
-            client_count = stats.get("clients", 0)
-            pos_clients = stats.get("pos_clients", 0)
-            cred_count = stats.get("credentials", 0)
-        except Exception:
-            ap_count = pos_count = client_count = pos_clients = cred_count = 0
-
-        # Engines running indicator
-        engines = []
-        if self.recon_running:
-            engines.append("RECON")
-        if self.attack_running:
-            engines.append("ATTACK")
-        if self.mitm_running:
-            engines.append("MITM")
-        if self.printer_running:
-            engines.append("PRINTER")
-        engine_str = ",".join(engines) if engines else "None"
-
-        # Status line
-        status_line = (
-            f" APs:{ap_count}({pos_count}POS) | Clients:{client_count}({pos_clients}POS) | "
-            f"Creds:{cred_count} | Engines:[{engine_str}] | {self.status_message}"
-        )
-        # Help line
-        help_line = " [Tab/1-6]:Switch | [Arrows]:Navigate | [Enter]:Action | [Space]:Toggle | [L]:Log | [q]:Quit "
-
-        try:
-            # Status bar (second to last line)
-            stdscr.addstr(height - 2, 0, " " * (width - 1), curses.color_pair(COLOR_STATUS))
-            stdscr.addstr(height - 2, 0, status_line[:width - 1], curses.color_pair(COLOR_STATUS))
-        except curses.error:
-            pass
-        try:
-            # Help bar (last line)
-            stdscr.addstr(height - 1, 0, " " * (width - 1), curses.color_pair(COLOR_STATUS))
-            stdscr.addstr(height - 1, 0, help_line[:width - 1],
-                          curses.color_pair(COLOR_STATUS) | curses.A_DIM)
-        except curses.error:
-            pass
-
-    # ---- Data Access Methods ----
-
-    def _get_access_points(self):
-        """Fetch access points from database."""
-        try:
-            # Use the DB method for POS APs first
-            aps = self.db.get_pos_access_points()
-            results = []
-            if aps:
-                for ap in aps:
-                    if len(ap) >= 6:
-                        bssid, ssid, channel, vendor, security, rssi = ap[:6]
-                        results.append({
-                            "bssid": bssid,
-                            "ssid": ssid or "<hidden>",
-                            "channel": channel,
-                            "vendor": vendor,
-                            "security": security,
-                            "rssi": rssi,
-                            "is_pos": True,
-                        })
-
-            # Also fetch non-POS APs
-            try:
-                conn = self.db.conn
-                if conn:
-                    cursor = conn.execute(
-                        "SELECT bssid, ssid, channel, vendor, security, rssi, is_pos "
-                        "FROM access_points WHERE is_pos = 0 "
-                        "ORDER BY rssi DESC LIMIT 30"
-                    )
-                    for row in cursor.fetchall():
-                        results.append({
-                            "bssid": row[0],
-                            "ssid": row[1] or "<hidden>",
-                            "channel": row[2],
-                            "vendor": row[3],
-                            "security": row[4],
-                            "rssi": row[5],
-                            "is_pos": False,
-                        })
+                self.recon_engine.stop()
             except Exception:
                 pass
 
-            # Sort by RSSI descending
-            results.sort(key=lambda x: x.get("rssi") or -100, reverse=True)
-            return results[:50]
-        except Exception:
-            return []
+        # Stop autopwn
+        if self.autopwn_running:
+            self._stop_autopwn()
 
-    def _get_clients(self):
-        """Fetch discovered clients from database."""
+        # Stop harvester
+        if self.harvester_running:
+            self._stop_harvester()
+
+        # Stop all engine groups
+        for group in [self.wifi_attacks, self.cred_attacks, self.mitm_attacks,
+                      self.network_modules, self.ble_sdr_modules]:
+            for key, engine in group.items():
+                if engine.is_running:
+                    try:
+                        engine.stop()
+                    except Exception:
+                        pass
+
+        # Stop cracking
+        if self.cracking_active:
+            self._stop_cracking()
+
+        # Close database
         try:
-            ap_clients = self.db.get_all_ap_clients()
-            results = []
-            if ap_clients:
-                for bssid, clients in ap_clients.items():
-                    for client_mac in clients:
-                        results.append({
-                            "mac": client_mac,
-                            "vendor": "Unknown",
-                            "associated_ap": bssid,
-                            "rssi": "N/A",
-                            "is_pos": False,
-                        })
-            return results[:30]
+            self.db.close()
         except Exception:
-            return []
+            pass
 
-    def _get_credentials(self):
-        """Fetch captured credentials from database."""
-        try:
-            conn = self.db.conn
-            if conn is None:
-                return []
-            cursor = conn.execute(
-                "SELECT timestamp, client_ip, username, password, url "
-                "FROM credentials ORDER BY timestamp DESC LIMIT 50"
-            )
-            rows = cursor.fetchall()
-            results = []
-            for row in rows:
-                results.append({
-                    "timestamp": str(row[0])[:11] if row[0] else "?",
-                    "source_ip": row[1] or "?",
-                    "username": row[2] or "?",
-                    "password": row[3] or "****",
-                    "url": row[4] or "?",
-                    "protocol": "HTTP",
-                })
-            return results
-        except Exception:
-            return []
 
-    def _get_credential_count(self):
-        """Get total credential count."""
-        try:
-            stats = self.db.get_stats()
-            return stats.get("credentials", 0)
-        except Exception:
-            return 0
-
-    def _get_printers(self):
-        """Fetch discovered printers from database."""
-        try:
-            printers = self.db.get_printers()
-            if not printers:
-                return []
-            results = []
-            for p in printers:
-                results.append({
-                    "ip": p.get("ip", "?"),
-                    "model": p.get("model", "?"),
-                    "manufacturer": p.get("manufacturer", "?"),
-                    "hostname": p.get("hostname", "?"),
-                    "firmware": p.get("firmware", "?"),
-                    "default_creds": p.get("default_creds", False),
-                    "vulns": p.get("vulns", 0),
-                })
-            return results
-        except Exception:
-            return []
-
-    def _get_print_jobs(self):
-        """Fetch intercepted print jobs from database."""
-        try:
-            jobs = self.db.get_print_jobs()
-            if not jobs:
-                return []
-            results = []
-            for j in jobs:
-                results.append({
-                    "timestamp": j.get("timestamp", "?"),
-                    "printer_ip": j.get("printer_ip", "?"),
-                    "source": j.get("source", "?"),
-                    "document": j.get("document", "?"),
-                    "type": j.get("type", "?"),
-                    "pages": j.get("pages", "?"),
-                })
-            return results
-        except Exception:
-            return []
-
-    def _get_printer_credentials(self):
-        """Fetch printer credentials from database."""
-        try:
-            conn = self.db.conn
-            if conn is None:
-                return []
-            cursor = conn.execute(
-                "SELECT printer_ip, protocol, username, password "
-                "FROM printer_credentials ORDER BY rowid DESC LIMIT 20"
-            )
-            rows = cursor.fetchall()
-            results = []
-            for row in rows:
-                results.append({
-                    "printer_ip": row[0] or "?",
-                    "protocol": row[1] or "?",
-                    "username": row[2] or "?",
-                    "password": row[3] or "****",
-                })
-            return results
-        except Exception:
-            return []
-
+# ================================================================
+# MODULE-LEVEL main() FUNCTION
+# ================================================================
 
 def main():
-    """Launch the POSFramework CLI Terminal UI."""
+    """Entry point for the POSFramework Terminal UI."""
     ui = TerminalUI()
     ui.run()
 
