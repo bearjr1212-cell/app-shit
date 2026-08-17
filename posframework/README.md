@@ -37,7 +37,7 @@ Project Structure:
   ├── hostapd_helper.py    # Hostapd configuration
   ├── plugin_loader.py     # Plugin system
   ├── post_attack.py       # Post-attack analysis
-  ├── gui.py               # Tkinter GUI
+  ├── gui.py               # Curses-based CLI terminal UI
   ├── main.py              # Multi-terminal UI
   │
   ├── native/              # Python ctypes wrappers for C libraries

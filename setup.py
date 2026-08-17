@@ -10,7 +10,6 @@ setup(
         'manuf',
     ],
     extras_require={
-        'gui': ['tkinter'],
         'config': ['pyyaml'],
     },
     entry_points={
