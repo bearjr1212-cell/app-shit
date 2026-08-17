@@ -241,6 +241,10 @@ def _add_attack_options(parser):
                      help="Clone target AP after deauth")
     grp.add_argument("--enable-client-isolation", action="store_true", default=False,
                      help="Enable client isolation attack")
+    grp.add_argument("--enable-pmkid", action="store_true", default=False,
+                     help="Enable PMKID clientless capture (requires hcxdumptool)")
+    grp.add_argument("--mac-randomize", action="store_true", default=False,
+                     help="Randomize monitor interface MAC before attack")
 
     plg = parser.add_argument_group("plugins")
     plg.add_argument("--plugins-dir", default=None, metavar="DIR",
@@ -616,6 +620,8 @@ def _run_attack(args):
         dos_mode=getattr(args, 'dos_mode', None),
         enable_client_isolation=getattr(args, 'enable_client_isolation', False),
         enable_printer_attacks=getattr(args, 'enable_printers', False),
+        enable_pmkid=getattr(args, 'enable_pmkid', False),
+        enable_mac_randomize=getattr(args, 'mac_randomize', False),
         plugins=getattr(args, 'plugins', None),
         plugins_dir=getattr(args, 'plugins_dir', None),
     )
@@ -671,6 +677,8 @@ def _run_full(args):
         dos_mode=getattr(args, 'dos_mode', None),
         enable_client_isolation=getattr(args, 'enable_client_isolation', False),
         enable_printer_attacks=getattr(args, 'enable_printers', False),
+        enable_pmkid=getattr(args, 'enable_pmkid', False),
+        enable_mac_randomize=getattr(args, 'mac_randomize', False),
         plugins=getattr(args, 'plugins', None),
         plugins_dir=getattr(args, 'plugins_dir', None),
     )

