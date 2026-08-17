@@ -475,9 +475,8 @@ class AttackOrchestrator:
             log.info("VLAN scan phase: discovering VLANs...")
             self.vlan_scanner.start()
 
-            # Wait for sniff to complete
-            if self.vlan_scanner._sniff_thread:
-                self.vlan_scanner._sniff_thread.join(timeout=35)
+            # Wait for sniff to complete using public API
+            self.vlan_scanner.wait_for_completion(timeout=35)
 
             self.vlan_scanner.stop()
 

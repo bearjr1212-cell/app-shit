@@ -21,6 +21,7 @@ from collections import defaultdict
 from scapy.all import IP, TCP, Raw, sniff
 
 from .config import log
+from .net_utils import get_interface_ip
 
 
 class NTLMCapture:
@@ -225,7 +226,8 @@ class NTLMCapture:
         if not (tcp.dport in (445, 80, 8080) or tcp.sport in (445, 80, 8080)):
             return
 
-        self._packets_processed += 1
+        with self._lock:
+            self._packets_processed += 1
         payload = bytes(pkt[Raw].load)
         src_ip = pkt[IP].src if pkt.haslayer(IP) else "unknown"
         dst_ip = pkt[IP].dst if pkt.haslayer(IP) else "unknown"
@@ -390,10 +392,13 @@ class NTLMCapture:
         try:
             self._smb_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._smb_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self._smb_server.bind(("0.0.0.0", 445))
+            # Bind to specific interface IP instead of all interfaces
+            # to limit exposure on multi-homed machines
+            bind_addr = get_interface_ip(self.interface) or "0.0.0.0"
+            self._smb_server.bind((bind_addr, 445))
             self._smb_server.listen(10)
             self._smb_server.settimeout(1.0)
-            log.info("NTLM SMB challenge server started on port 445")
+            log.info(f"NTLM SMB challenge server started on {bind_addr}:445")
 
             while self._running:
                 try:

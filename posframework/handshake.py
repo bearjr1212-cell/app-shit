@@ -222,8 +222,18 @@ class HandshakeCapture:
         hccapx += struct.pack("<H", min(eapol_len, 256))
         # EAPOL data (256 bytes padded)
         hccapx += eapol_frame_data[:256].ljust(256, b"\x00")
-        # Message pair (1 byte) - 0 = M1+M2
-        hccapx += struct.pack("B", 0)
+        # Message pair (1 byte) - derived from actual captured messages
+        # 0 = M1+M2, 2 = M2+M3, 5 = M3+M4
+        messages = data["messages"]
+        if 1 in messages and 2 in messages:
+            msg_pair = 0  # M1+M2 pair
+        elif 2 in messages and 3 in messages:
+            msg_pair = 2  # M2+M3 pair
+        elif 3 in messages and 4 in messages:
+            msg_pair = 5  # M3+M4 pair
+        else:
+            msg_pair = 0  # default fallback
+        hccapx += struct.pack("B", msg_pair)
 
         with open(filename, "wb") as f:
             f.write(hccapx)

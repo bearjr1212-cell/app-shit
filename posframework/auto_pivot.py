@@ -70,6 +70,8 @@ class AutoPivot:
                 f.write(f'    psk="{password}"\n')
                 f.write("    key_mgmt=WPA-PSK\n")
                 f.write("}\n")
+            # Restrict permissions - config contains sensitive PSK
+            os.chmod(config_path, 0o600)
         except OSError as e:
             log.error(f"Failed to write wpa config: {e}")
             return False

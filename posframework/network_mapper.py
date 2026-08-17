@@ -25,6 +25,7 @@ from scapy.all import (
 )
 
 from .config import log
+from .net_utils import parse_cidr
 
 
 # Common ports for service detection
@@ -432,14 +433,42 @@ class NetworkSegmentationMapper:
     def _arp_sweep(self, vlan_id, ip_range):
         """
         Send ARP requests (optionally tagged) across the IP range
-        and collect responses.
+        and collect responses concurrently.
 
         Returns:
             List of responding host IPs
         """
-        hosts = self._parse_cidr(ip_range)
+        hosts = parse_cidr(ip_range)
         discovered = []
 
+        # Start sniffing for ARP responses BEFORE sending requests
+        # so we capture early replies that arrive during the send phase
+        sniff_stop_event = threading.Event()
+
+        def _sniff_arp():
+            try:
+                responses = sniff(
+                    iface=self.interface,
+                    filter="arp",
+                    timeout=10,
+                    store=1,
+                    stop_filter=lambda x: sniff_stop_event.is_set()
+                )
+                for pkt in responses:
+                    if pkt.haslayer(ARP) and pkt[ARP].op == 2:
+                        src_ip = pkt[ARP].psrc
+                        if src_ip not in discovered and src_ip != "0.0.0.0":
+                            discovered.append(src_ip)
+            except Exception as e:
+                log.debug(f"ARP sweep sniff error: {e}")
+
+        sniff_thread = threading.Thread(target=_sniff_arp, daemon=True)
+        sniff_thread.start()
+
+        # Brief pause to ensure sniff is active before sending
+        time.sleep(0.1)
+
+        # Send ARP requests
         for host_ip in hosts:
             if not self._running:
                 break
@@ -461,21 +490,10 @@ class NetworkSegmentationMapper:
                 pass
             time.sleep(0.005)
 
-        # Sniff for ARP responses
-        try:
-            responses = sniff(
-                iface=self.interface,
-                filter="arp",
-                timeout=5,
-                store=1
-            )
-            for pkt in responses:
-                if pkt.haslayer(ARP) and pkt[ARP].op == 2:
-                    src_ip = pkt[ARP].psrc
-                    if src_ip not in discovered and src_ip != "0.0.0.0":
-                        discovered.append(src_ip)
-        except Exception as e:
-            log.debug(f"ARP sweep sniff error: {e}")
+        # Wait for remaining responses after all requests are sent
+        time.sleep(5)
+        sniff_stop_event.set()
+        sniff_thread.join(timeout=3)
 
         return discovered
 
@@ -593,26 +611,8 @@ class NetworkSegmentationMapper:
         return False
 
     def _parse_cidr(self, cidr):
-        """Parse CIDR to host IP list (max /24)."""
-        hosts = []
-        try:
-            if "/" not in cidr:
-                return [cidr]
-            base, prefix = cidr.split("/")
-            parts = base.split(".")
-            if len(parts) != 4:
-                return []
-            prefix = int(prefix)
-            if prefix >= 24:
-                for i in range(1, 255):
-                    hosts.append(f"{parts[0]}.{parts[1]}.{parts[2]}.{i}")
-            else:
-                # For larger subnets, only scan first /24
-                for i in range(1, 255):
-                    hosts.append(f"{parts[0]}.{parts[1]}.{parts[2]}.{i}")
-        except (ValueError, IndexError):
-            pass
-        return hosts
+        """Parse CIDR to host IP list (delegates to net_utils)."""
+        return parse_cidr(cidr)
 
     def _persist_results(self):
         """Persist mapping results to database."""

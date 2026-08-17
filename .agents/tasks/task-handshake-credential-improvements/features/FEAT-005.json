@@ -1,0 +1,41 @@
+{
+  "id": "FEAT-005",
+  "type": "fix",
+  "description": "Address review findings: SQLite cursor concurrency, ARP sweep timing, NTLM bind interface, VLANScanner public wait method, _packets_processed lock, _parse_cidr dedup, hccapx message pair derivation, HTTPS stale iptables cleanup, auto-pivot world-readable credentials",
+  "status": "in_progress",
+  "steps": [
+    "Fix database.py: Add connection-level lock around all cursor.execute calls for thread safety",
+    "Fix vlan_scanner.py: Overlap sniff and send in arp_scan_vlan; add public wait_for_completion method; protect _packets_processed with _lock",
+    "Fix network_mapper.py: Overlap sniff and send in _arp_sweep; remove duplicate _parse_cidr by importing from shared utility",
+    "Fix ntlm_capture.py: Bind SMB server to specific interface IP instead of 0.0.0.0; protect _packets_processed with _lock",
+    "Fix orchestrator.py: Use public wait_for_completion method instead of accessing VLANScanner._sniff_thread",
+    "Fix handshake.py: Derive message pair value from actual captured messages instead of hardcoding 0",
+    "Fix https_intercept.py: Add startup check to remove stale iptables rules before adding new ones",
+    "Fix auto_pivot.py: Set os.chmod(config_path, 0o600) on wpa_supplicant config file",
+    "Create posframework/net_utils.py: Shared _parse_cidr utility to eliminate duplication"
+  ],
+  "acceptance_criteria": [
+    "database.py: All cursor.execute calls are protected by a lock",
+    "vlan_scanner.py: ARP scan sniffs concurrently with sending; has wait_for_completion() public method; _packets_processed accessed under _lock",
+    "network_mapper.py: ARP sweep sniffs concurrently with sending; uses shared _parse_cidr",
+    "ntlm_capture.py: SMB server binds to interface IP, not 0.0.0.0; _packets_processed under _lock",
+    "orchestrator.py: Uses vlan_scanner.wait_for_completion() instead of _sniff_thread",
+    "handshake.py: hccapx message pair derived from actual captured messages",
+    "https_intercept.py: Stale iptables rules cleaned up on start()",
+    "auto_pivot.py: wpa_supplicant config file has 0o600 permissions",
+    "All modified files pass ast.parse validation"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('posframework/database.py').read()); print('database.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/vlan_scanner.py').read()); print('vlan_scanner.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/network_mapper.py').read()); print('network_mapper.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/ntlm_capture.py').read()); print('ntlm_capture.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/orchestrator.py').read()); print('orchestrator.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/handshake.py').read()); print('handshake.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/https_intercept.py').read()); print('https_intercept.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/auto_pivot.py').read()); print('auto_pivot.py OK')\"",
+    "python3 -c \"import ast; ast.parse(open('posframework/net_utils.py').read()); print('net_utils.py OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": null
+}

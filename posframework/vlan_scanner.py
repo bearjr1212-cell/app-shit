@@ -23,6 +23,7 @@ from scapy.all import (
 )
 
 from .config import log
+from .net_utils import parse_cidr
 
 
 class VLANScanner:
@@ -79,6 +80,24 @@ class VLANScanner:
 
         log.info(f"VLANScanner stopped: {len(self._vlans)} VLANs discovered, "
                  f"{self._packets_processed} packets processed")
+
+    def wait_for_completion(self, timeout=35):
+        """
+        Wait for the background sniff thread to finish.
+
+        Public method for external callers to wait on the scanner
+        without accessing private thread state directly.
+
+        Args:
+            timeout: Maximum seconds to wait (default: 35)
+
+        Returns:
+            True if thread completed, False if timed out or no thread running
+        """
+        if self._sniff_thread and self._sniff_thread.is_alive():
+            self._sniff_thread.join(timeout=timeout)
+            return not self._sniff_thread.is_alive()
+        return True
 
     # ─── Discovery Methods ───────────────────────────────────────────────────
 
@@ -205,12 +224,40 @@ class VLANScanner:
                 log.warning(f"No IP range known for VLAN {vlan_id}")
                 return []
 
-        hosts = self._parse_cidr(ip_range)
+        hosts = parse_cidr(ip_range)
         discovered = []
 
         log.info(f"ARP scanning VLAN {vlan_id} ({ip_range}, "
                  f"{len(hosts)} hosts)...")
 
+        # Start sniffing for ARP responses BEFORE sending requests
+        # so we capture early replies that arrive during the send phase
+        sniff_stop_event = threading.Event()
+
+        def _sniff_arp():
+            try:
+                responses = sniff(
+                    iface=self.interface,
+                    filter="arp",
+                    timeout=10,
+                    store=1,
+                    stop_filter=lambda x: sniff_stop_event.is_set()
+                )
+                for pkt in responses:
+                    if pkt.haslayer(ARP) and pkt[ARP].op == 2:  # is-at
+                        src_ip = pkt[ARP].psrc
+                        if src_ip not in discovered:
+                            discovered.append(src_ip)
+            except Exception as e:
+                log.debug(f"ARP response sniff error: {e}")
+
+        sniff_thread = threading.Thread(target=_sniff_arp, daemon=True)
+        sniff_thread.start()
+
+        # Brief pause to ensure sniff is active before sending
+        time.sleep(0.1)
+
+        # Send ARP requests
         for host_ip in hosts:
             if not self._running:
                 break
@@ -229,21 +276,10 @@ class VLANScanner:
             # Rate limit
             time.sleep(0.01)
 
-        # Collect responses via brief sniff
-        try:
-            responses = sniff(
-                iface=self.interface,
-                filter="arp",
-                timeout=5,
-                store=1
-            )
-            for pkt in responses:
-                if pkt.haslayer(ARP) and pkt[ARP].op == 2:  # is-at
-                    src_ip = pkt[ARP].psrc
-                    if src_ip not in discovered:
-                        discovered.append(src_ip)
-        except Exception as e:
-            log.debug(f"ARP response sniff error: {e}")
+        # Wait for remaining responses after all requests are sent
+        time.sleep(5)
+        sniff_stop_event.set()
+        sniff_thread.join(timeout=3)
 
         with self._lock:
             self._vlan_hosts[vlan_id] = discovered
@@ -271,16 +307,17 @@ class VLANScanner:
 
     def get_stats(self):
         """Return scanner statistics."""
-        return {
-            "running": self._running,
-            "vlans_discovered": len(self._vlans),
-            "cdp_devices": len(self._cdp_devices),
-            "lldp_devices": len(self._lldp_devices),
-            "switches": len(self._topology),
-            "dtp_spoofed": self._dtp_spoofed,
-            "packets_processed": self._packets_processed,
-            "vlan_hosts_total": sum(len(v) for v in self._vlan_hosts.values()),
-        }
+        with self._lock:
+            return {
+                "running": self._running,
+                "vlans_discovered": len(self._vlans),
+                "cdp_devices": len(self._cdp_devices),
+                "lldp_devices": len(self._lldp_devices),
+                "switches": len(self._topology),
+                "dtp_spoofed": self._dtp_spoofed,
+                "packets_processed": self._packets_processed,
+                "vlan_hosts_total": sum(len(v) for v in self._vlan_hosts.values()),
+            }
 
     # ─── Internal Sniff Logic ────────────────────────────────────────────────
 
@@ -301,7 +338,8 @@ class VLANScanner:
 
     def _packet_handler(self, pkt):
         """Process each sniffed packet for VLAN/CDP/LLDP/DTP info."""
-        self._packets_processed += 1
+        with self._lock:
+            self._packets_processed += 1
 
         # Check for 802.1Q tagged frames
         if pkt.haslayer(Dot1Q):
@@ -695,30 +733,8 @@ class VLANScanner:
             return "00:11:22:33:44:55"
 
     def _parse_cidr(self, cidr):
-        """Parse CIDR notation into list of host IPs (max /24 = 254 hosts)."""
-        hosts = []
-        try:
-            if "/" not in cidr:
-                return [cidr]
-            base, prefix = cidr.split("/")
-            prefix = int(prefix)
-            parts = base.split(".")
-            if len(parts) != 4:
-                return []
-            if prefix == 24:
-                for i in range(1, 255):
-                    hosts.append(f"{parts[0]}.{parts[1]}.{parts[2]}.{i}")
-            elif prefix == 16:
-                # Only scan first subnet for /16
-                for i in range(1, 255):
-                    hosts.append(f"{parts[0]}.{parts[1]}.{parts[2]}.{i}")
-            else:
-                # Default: just the base network /24
-                for i in range(1, 255):
-                    hosts.append(f"{parts[0]}.{parts[1]}.{parts[2]}.{i}")
-        except (ValueError, IndexError):
-            pass
-        return hosts
+        """Parse CIDR notation into list of host IPs (delegates to net_utils)."""
+        return parse_cidr(cidr)
 
     def _persist_vlans(self):
         """Persist all discovered VLANs to database."""

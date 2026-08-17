@@ -511,6 +511,9 @@ class HTTPSInterceptor:
 
         self._running = True
 
+        # Remove any stale iptables rules from a previous crash before adding new ones
+        self._teardown_iptables()
+
         # Set up iptables redirect
         self._setup_iptables()
 
