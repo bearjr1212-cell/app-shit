@@ -14,9 +14,7 @@ This module provides:
 
 import json
 import os
-import stat
 import subprocess
-import tempfile
 import threading
 import time
 from collections import deque
@@ -380,66 +378,11 @@ class LiveDecryptionSession:
         self._credentials: Deque[Dict[str, str]] = deque(maxlen=self.MAX_ENTRIES)
         self._frame_count = 0
         self._start_time = 0.0
-        # Temporary key file for PSK (avoids exposing secrets on command line)
-        self._key_file: Optional[str] = None
 
     @property
     def running(self) -> bool:
         """Whether the decryption session is currently active."""
         return self._running
-
-    def _create_key_file(
-        self,
-        psk: Optional[str] = None,
-        ssid: Optional[str] = None,
-        wep_keys: Optional[List[str]] = None,
-    ) -> Optional[str]:
-        """
-        Write decryption keys to a temporary file with restricted permissions.
-
-        This avoids exposing secrets on the command line (visible via ps/proc).
-        The file is mode 0600 and cleaned up on stop().
-
-        Returns:
-            Path to the temporary key file, or None if no keys to write.
-        """
-        lines: List[str] = []
-
-        if psk and ssid:
-            lines.append(f'"wpa-pwd","{psk}:{ssid}"')
-        elif psk and len(psk) == 64 and all(c in "0123456789abcdefABCDEF" for c in psk):
-            lines.append(f'"wpa-psk","{psk}"')
-
-        if wep_keys:
-            for wep_key in wep_keys:
-                lines.append(f'"wep","{wep_key}"')
-
-        if not lines:
-            return None
-
-        try:
-            fd, path = tempfile.mkstemp(prefix="tshark_keys_", suffix=".txt")
-            try:
-                os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)  # 0600
-                with os.fdopen(fd, "w") as f:
-                    for line in lines:
-                        f.write(line + "\n")
-            except Exception:
-                os.close(fd)
-                raise
-            return path
-        except OSError as e:
-            log.error(f"Failed to create key file: {e}")
-            return None
-
-    def _remove_key_file(self) -> None:
-        """Remove the temporary key file if it exists."""
-        if self._key_file and os.path.isfile(self._key_file):
-            try:
-                os.unlink(self._key_file)
-            except OSError:
-                pass
-            self._key_file = None
 
     def start(
         self,
@@ -452,8 +395,10 @@ class LiveDecryptionSession:
         """
         Start a live tshark decryption session.
 
-        Keys are written to a temporary file (mode 0600) rather than passed
-        on the command line, preventing exposure via ps or /proc/<pid>/cmdline.
+        Decryption keys are passed inline via tshark's -o uat:80211_keys option.
+        Note: tshark does not support loading keys from an arbitrary file via -o,
+        so the PSK will be visible in the process listing (/proc/<pid>/cmdline).
+        This is a known tshark limitation.
 
         Args:
             interface: Network interface in monitor mode.
@@ -473,23 +418,18 @@ class LiveDecryptionSession:
         # Build command
         cmd: List[str] = [tshark_path, "-i", interface, "-T", "json", "-l"]
 
-        # Write keys to a temp file to avoid exposing PSK on the command line
-        key_file = self._create_key_file(psk=psk, ssid=ssid, wep_keys=wep_keys)
-        if key_file:
-            self._key_file = key_file
-            cmd.extend(["-o", "wlan.enable_decryption:TRUE"])
-            cmd.extend(["-o", f"uat:80211_keys:\"{key_file}\""])
-        elif psk or wep_keys:
-            # Fallback: pass keys via CLI args if temp file creation failed
-            decrypt_args = self._engine.build_decrypt_args(
-                psk=psk, ssid=ssid, wep_keys=wep_keys, tls_keylog=tls_keylog
+        # Build decryption arguments using inline -o flags
+        # WARNING: PSK will be visible in process listing (tshark limitation)
+        if psk or wep_keys:
+            log.warning(
+                "Decryption keys will be visible in the process listing "
+                "(ps/proc). This is a tshark limitation - it does not support "
+                "loading WPA keys from an external file via command-line options."
             )
-            cmd.extend(decrypt_args)
-
-        # TLS keylog handled separately (it is already a file path, not a secret)
-        if tls_keylog:
-            tls_args = self._engine.build_decrypt_args(tls_keylog=tls_keylog)
-            cmd.extend(tls_args)
+        decrypt_args = self._engine.build_decrypt_args(
+            psk=psk, ssid=ssid, wep_keys=wep_keys, tls_keylog=tls_keylog
+        )
+        cmd.extend(decrypt_args)
 
         # Add display filter for interesting protocols
         display_filter = (
@@ -510,7 +450,6 @@ class LiveDecryptionSession:
             )
         except (OSError, FileNotFoundError) as e:
             log.error(f"Failed to start tshark for decryption: {e}")
-            self._remove_key_file()
             return False
 
         self._running = True
@@ -546,9 +485,6 @@ class LiveDecryptionSession:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3)
             self._thread = None
-
-        # Clean up temporary key file
-        self._remove_key_file()
 
         elapsed = time.time() - self._start_time if self._start_time else 0
         log.info(

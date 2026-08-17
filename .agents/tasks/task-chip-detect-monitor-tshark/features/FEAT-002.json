@@ -28,5 +28,5 @@
     "python3 -c \"import ast; ast.parse(open('posframework/recon.py').read()); print('recon.py: OK')\""
   ],
   "blocked_reason": null,
-  "findings": "All acceptance criteria met. DECRYPTION_CAPABILITIES covers WPA-PSK, WPA2-PSK (raw hex), WEP, TLS keylog. PROTOCOL_DISSECTORS has 17 entries (exceeds 10 minimum). LiveDecryptionSession uses subprocess.Popen with terminate/kill cleanup. ReconEngine adds tshark_psk and tshark_ssid parameters with conditional LiveDecryptionSession. All 4 files pass AST validation. Full posframework and tests directories pass AST parsing."
+  "findings": "All acceptance criteria met. DECRYPTION_CAPABILITIES covers WPA-PSK, WPA2-PSK (raw hex), WEP, TLS keylog. PROTOCOL_DISSECTORS has 17 entries (exceeds 10 minimum). LiveDecryptionSession uses subprocess.Popen with terminate/kill cleanup. ReconEngine adds tshark_psk and tshark_ssid parameters with conditional LiveDecryptionSession. All 4 files pass AST validation. Full posframework and tests directories pass AST parsing. v2 review fix: removed broken _create_key_file/_remove_key_file mechanism (tshark does not support loading keys from file via -o). Now uses build_decrypt_args() inline approach directly with log.warning about PSK visibility in process listing."
 }

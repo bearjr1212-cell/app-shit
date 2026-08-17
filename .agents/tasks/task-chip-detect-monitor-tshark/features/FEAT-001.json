@@ -2,7 +2,7 @@
   "id": "FEAT-001",
   "type": "feat",
   "description": "Automatic chip detection module - detect WiFi chipset from /sys/class/net, lspci, lsusb, ethtool, and iw info, then return optimal monitor mode configuration for that chip. Integrate with LinuxMonitorManager for automatic best-method selection (airmon-ng, iw, or direct driver commands).",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Create posframework/chip_detector.py with a ChipDetector class that probes multiple sources: (1) /sys/class/net/<iface>/device/driver symlink for kernel driver name, (2) /sys/class/net/<iface>/device/uevent for PCI/USB vendor:product IDs, (3) lspci -k output for PCI wireless devices, (4) lsusb output for USB wireless adapters, (5) ethtool -i <iface> for driver/firmware info, (6) iw dev <iface> info and iw phy <phy> info for capabilities. Return a ChipInfo dataclass with fields: driver, vendor (Intel/Broadcom/Atheros/Realtek/MediaTek/Ralink), model, bus_type (pci/usb), vendor_id, product_id, firmware_version, supported_modes, injection_support.",
     "Add a MonitorMethodSelector class in posframework/chip_detector.py that takes a ChipInfo and returns the optimal monitor mode method: 'airmon-ng' for cards known to work best with airmon (ath9k, ath9k_htc), 'iw' for standard nl80211 cards (iwlwifi, mt76), 'driver' for cards requiring direct driver commands (rtl88xxau). Include a priority-ordered list of methods to try with fallback.",
@@ -29,5 +29,5 @@
     "python3 -c \"import ast; ast.parse(open('posframework/monitor_mode.py').read()); print('monitor_mode.py: OK')\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All 5 files pass AST validation. Implementation covers all 6 detection sources, 3 monitor methods with priority-ordered fallback, atexit+signal cleanup, and comprehensive unit tests with mocks."
 }
