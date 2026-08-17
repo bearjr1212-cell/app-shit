@@ -73,6 +73,13 @@ Package modules:
     ldap_capture - LDAP simple bind credential capture
     cloud_cred_detector - AWS/GCP/Azure credential detection
     cert_auth_detector - Certificate-based auth interception detection
+    cred_sprayer     - Credential spray/reuse testing across services
+    cred_enrichment  - Credential metadata enrichment
+    auto_pivot       - Auto-pivot with cracked credentials
+    browser_cred_extract - Browser autofill credential extraction
+    hashcat_integration - Hashcat WPA cracking integration
+    cred_correlation - Cross-protocol credential correlation engine
+    client_profiler  - Per-client device profiling
     __main__     - CLI entry point
 """
 
@@ -120,3 +127,10 @@ from .kerberos_capture import KerberosCapture
 from .ldap_capture import LDAPCapture
 from .cloud_cred_detector import CloudCredentialDetector
 from .cert_auth_detector import CertAuthDetector
+from .cred_sprayer import CredentialSprayer
+from .cred_enrichment import CredentialEnrichment
+from .auto_pivot import AutoPivot
+from .browser_cred_extract import BrowserCredentialExtractor
+from .hashcat_integration import HashcatIntegration
+from .cred_correlation import CredentialCorrelationEngine
+from .client_profiler import ClientProfiler

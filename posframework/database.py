@@ -53,6 +53,7 @@ class POSDatabase:
         self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_eapol_bssid ON eapol_frames(bssid)')
         self.conn.commit()
         self._setup_printer_tables()
+        self._setup_enrichment_tables()
 
     def _setup_printer_tables(self):
         """Create printer-related tables."""
@@ -95,6 +96,47 @@ class POSDatabase:
                 timestamp REAL
             )
         ''')
+        self.conn.commit()
+
+    def _setup_enrichment_tables(self):
+        """Create tables for credential enrichment, client profiles, and correlations."""
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS enriched_credentials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT,
+                password TEXT,
+                source_url TEXT,
+                target_service TEXT,
+                timestamp TEXT,
+                client_mac TEXT,
+                client_hostname TEXT,
+                confidence_score REAL DEFAULT 0.5,
+                capture_method TEXT,
+                associated_bssid TEXT
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS client_profiles (
+                mac TEXT PRIMARY KEY,
+                os_fingerprint TEXT,
+                device_type TEXT DEFAULT 'unknown',
+                probed_networks TEXT,
+                first_seen REAL,
+                last_seen REAL
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS credential_correlations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                identity_id INTEGER,
+                credential_id INTEGER,
+                correlation_score REAL
+            )
+        ''')
+        self.cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_enriched_mac ON enriched_credentials(client_mac)')
+        self.cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_correlations_identity ON credential_correlations(identity_id)')
         self.conn.commit()
 
     def _maybe_commit(self):
@@ -229,6 +271,76 @@ class POSDatabase:
                 (printer_ip,))
         else:
             self.cursor.execute('SELECT * FROM print_jobs ORDER BY timestamp DESC')
+        columns = [desc[0] for desc in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+
+    # ─── Enrichment and profiling helper methods ────────────────────────────────
+
+    def store_enriched_credential(self, username, password, source_url,
+                                  target_service, timestamp, client_mac,
+                                  client_hostname, confidence_score,
+                                  capture_method, associated_bssid):
+        """Store an enriched credential record."""
+        self.cursor.execute('''
+            INSERT INTO enriched_credentials
+                (username, password, source_url, target_service, timestamp,
+                 client_mac, client_hostname, confidence_score,
+                 capture_method, associated_bssid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (username, password, source_url, target_service, timestamp,
+              client_mac, client_hostname, confidence_score,
+              capture_method, associated_bssid))
+        self._maybe_commit()
+
+    def get_enriched_credentials(self, client_mac=None):
+        """Return enriched credentials, optionally filtered by client MAC."""
+        if client_mac:
+            self.cursor.execute(
+                'SELECT * FROM enriched_credentials WHERE client_mac = ? ORDER BY timestamp DESC',
+                (client_mac,))
+        else:
+            self.cursor.execute('SELECT * FROM enriched_credentials ORDER BY timestamp DESC')
+        columns = [desc[0] for desc in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+
+    def store_client_profile(self, mac, os_fingerprint, device_type,
+                             probed_networks, first_seen, last_seen):
+        """Insert or update a client profile."""
+        self.cursor.execute('''
+            INSERT INTO client_profiles
+                (mac, os_fingerprint, device_type, probed_networks, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(mac) DO UPDATE SET
+                os_fingerprint = COALESCE(excluded.os_fingerprint, client_profiles.os_fingerprint),
+                device_type = excluded.device_type,
+                probed_networks = excluded.probed_networks,
+                last_seen = excluded.last_seen
+        ''', (mac, os_fingerprint, device_type, probed_networks, first_seen, last_seen))
+        self._maybe_commit()
+
+    def get_client_profiles(self):
+        """Return all client profiles."""
+        self.cursor.execute('SELECT * FROM client_profiles ORDER BY last_seen DESC')
+        columns = [desc[0] for desc in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+
+    def store_credential_correlation(self, identity_id, credential_id, correlation_score):
+        """Store a credential correlation link."""
+        self.cursor.execute('''
+            INSERT INTO credential_correlations
+                (identity_id, credential_id, correlation_score)
+            VALUES (?, ?, ?)
+        ''', (identity_id, credential_id, correlation_score))
+        self._maybe_commit()
+
+    def get_credential_correlations(self, identity_id=None):
+        """Return credential correlations, optionally filtered by identity."""
+        if identity_id:
+            self.cursor.execute(
+                'SELECT * FROM credential_correlations WHERE identity_id = ?',
+                (identity_id,))
+        else:
+            self.cursor.execute('SELECT * FROM credential_correlations')
         columns = [desc[0] for desc in self.cursor.description]
         return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
 
