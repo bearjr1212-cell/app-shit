@@ -184,8 +184,9 @@ class Target:
 
     @classmethod
     def from_wifi_scan(cls, scan_result: Dict[str, Any]) -> "Target":
-        """Create target from WiFi scan result."""
+        """Create target from WiFi scan result dict."""
         bssid = scan_result.get("bssid", "")
+        clients = scan_result.get("clients", [])
         return cls(
             id=bssid,
             target_type=TargetType.WIFI_AP,
@@ -195,6 +196,9 @@ class Target:
             frequency=scan_result.get("frequency"),
             encryption=scan_result.get("encryption"),
             signal_dbm=scan_result.get("signal_dbm", -100),
+            vendor=scan_result.get("vendor"),
+            active_clients=clients,
+            client_count=scan_result.get("client_count", len(clients)),
         )
 
 

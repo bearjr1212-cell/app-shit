@@ -82,15 +82,20 @@ class AutoPwnConfig:
     mode: AutoPwnMode = AutoPwnMode.AGGRESSIVE
 
     # Scanning
-    scan_interval: float = 30.0
-    scan_channels: List[int] = field(default_factory=lambda: [1, 6, 11])
+    scan_interval: float = 15.0
+    scan_channels: List[int] = field(default_factory=lambda: [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+        36, 40, 44, 48, 52, 56, 60, 64,
+        100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
+        149, 153, 157, 161, 165,
+    ])
     scan_5ghz: bool = True
 
     # Targeting
     target_config: TargetAnalyzerConfig = field(
         default_factory=TargetAnalyzerConfig
     )
-    max_concurrent_attacks: int = 1
+    max_concurrent_attacks: int = 3
 
     # Attacks
     attack_config: AttackChainConfig = field(
@@ -98,11 +103,11 @@ class AutoPwnConfig:
     )
     enable_pmkid: bool = True
     enable_deauth: bool = True
-    enable_eviltwin: bool = False
+    enable_eviltwin: bool = True
 
     # Cracking
     enable_local_crack: bool = True
-    enable_cloud_crack: bool = False
+    enable_cloud_crack: bool = True
     crack_timeout: int = 300
 
     # Safety

