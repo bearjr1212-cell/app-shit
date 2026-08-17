@@ -34,6 +34,7 @@ from .config import (
 from .intel import is_pos_vendor, is_pos_ssid
 from .crypto import parse_rsn_ie, parse_wpa_ie, classify_security
 from .wireshark_capture import WiresharkCapture
+from .tshark_decrypt import TsharkDecryptionEngine, LiveDecryptionSession
 from .monitor_mode import (
     setup_monitor_mode, teardown_monitor_mode,
     WindowsMonitorManager, check_npcap_monitor_support
@@ -92,7 +93,8 @@ class ReconEngine:
     modules to query for automated target selection.
     """
 
-    def __init__(self, interface, db, channels=None, channel_hop=True):
+    def __init__(self, interface, db, channels=None, channel_hop=True,
+                 tshark_psk=None, tshark_ssid=None):
         self.interface = interface
         self.db = db
         self.channels = channels or CHANNELS_24GHZ
@@ -110,6 +112,10 @@ class ReconEngine:
         self.signal_targeting = None
         # Monitor mode manager
         self._monitor_manager = None
+        # tshark live decryption
+        self._tshark_psk = tshark_psk
+        self._tshark_ssid = tshark_ssid
+        self._decrypt_session: 'LiveDecryptionSession | None' = None
 
     @lru_cache(maxsize=16384)
     def _get_vendor(self, mac: str) -> str:
@@ -537,6 +543,10 @@ class ReconEngine:
             else:
                 log.warning("Monitor mode setup failed, using native capture mode")
         
+        # Start live decryption session if PSK is provided
+        if self._tshark_psk:
+            self._start_decrypt_session()
+        
         log.info(f"Recon active on {self.interface} | Channels: {self.channels}")
         if self.channel_hop:
             threading.Thread(target=self._hop_channels, daemon=True).start()
@@ -575,6 +585,20 @@ class ReconEngine:
         self.running = False
         self._print_status()
         
+        # Stop live decryption session
+        if self._decrypt_session:
+            log.info("Stopping live decryption session...")
+            self._decrypt_session.stop()
+            summary = self._decrypt_session.get_decrypted_summary()
+            log.info(
+                f"Decryption summary: {summary['frame_count']} frames, "
+                f"{len(summary['dns_queries'])} DNS, "
+                f"{len(summary['http_requests'])} HTTP, "
+                f"{len(summary['dhcp_leases'])} DHCP, "
+                f"{len(summary['credentials'])} credentials"
+            )
+            self._decrypt_session = None
+        
         # Teardown monitor mode (both platforms)
         if self._monitor_manager:
             platform_name = "Windows" if IS_WINDOWS else "Linux"
@@ -586,6 +610,62 @@ class ReconEngine:
     def set_signal_targeting(self, signal_targeting):
         """Set the signal targeting instance for RSSI sample collection."""
         self.signal_targeting = signal_targeting
+
+    def _start_decrypt_session(self):
+        """Start a live tshark decryption session alongside the scapy sniffer."""
+        session = LiveDecryptionSession(callback=self._handle_decrypted_data)
+        started = session.start(
+            interface=self.interface,
+            psk=self._tshark_psk,
+            ssid=self._tshark_ssid,
+        )
+        if started:
+            self._decrypt_session = session
+            log.info(
+                f"Live decryption active (SSID: {self._tshark_ssid or 'auto'})"
+            )
+        else:
+            log.warning("Live decryption session failed to start")
+
+    def _handle_decrypted_data(self, event):
+        """
+        Callback for LiveDecryptionSession decrypted data.
+
+        Logs decrypted traffic summaries and stores them in the database.
+
+        Args:
+            event: Dict with keys: protocol, data, timestamp.
+        """
+        protocol = event.get("protocol", "")
+        data = event.get("data", {})
+
+        if protocol == "dns":
+            query = data.get("query", "")
+            response = data.get("response", "")
+            if query:
+                log.info(f"[DECRYPT] DNS: {query} -> {response}")
+        elif protocol == "http":
+            host = data.get("host", "")
+            method = data.get("method", "")
+            uri = data.get("uri", "")
+            if host:
+                log.info(f"[DECRYPT] HTTP: {method} {host}{uri}")
+        elif protocol == "dhcp":
+            hostname = data.get("hostname", "")
+            mac = data.get("mac_addr", "")
+            if hostname:
+                log.info(f"[DECRYPT] DHCP: {hostname} ({mac})")
+        elif protocol == "eapol":
+            source = data.get("source", "")
+            bssid = data.get("bssid", "")
+            log.info(f"[DECRYPT] EAPOL: {source} <-> {bssid}")
+
+        # Store decrypted event in database
+        try:
+            self.db.log_decrypted_event(protocol, data)
+        except (AttributeError, TypeError):
+            # Database may not have log_decrypted_event yet
+            pass
     
     def enable_verbose(self):
         """Enable verbose mode to show all packets, not just POS."""
