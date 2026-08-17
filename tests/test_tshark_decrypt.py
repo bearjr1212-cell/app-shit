@@ -278,11 +278,11 @@ class TestLiveDecryptionSession(unittest.TestCase):
         session = LiveDecryptionSession()
         self.assertFalse(session.running)
         self.assertEqual(session._frame_count, 0)
-        self.assertEqual(session._dns_queries, [])
-        self.assertEqual(session._http_requests, [])
-        self.assertEqual(session._dhcp_leases, [])
-        self.assertEqual(session._eapol_events, [])
-        self.assertEqual(session._credentials, [])
+        self.assertEqual(len(session._dns_queries), 0)
+        self.assertEqual(len(session._http_requests), 0)
+        self.assertEqual(len(session._dhcp_leases), 0)
+        self.assertEqual(len(session._eapol_events), 0)
+        self.assertEqual(len(session._credentials), 0)
 
     def test_init_with_callback(self):
         """Session should accept a callback function."""
@@ -662,6 +662,32 @@ class TestLiveDecryptionSession(unittest.TestCase):
         # Should not raise
         session._parse_json_frame(frame_json)
         self.assertEqual(session._frame_count, 1)
+
+    # ─── Bounded Deque Tests ──────────────────────────────────────────────────
+
+    def test_data_lists_are_bounded(self):
+        """Data lists should be bounded deques to prevent unbounded memory growth."""
+        from collections import deque
+        session = LiveDecryptionSession()
+        self.assertIsInstance(session._dns_queries, deque)
+        self.assertIsInstance(session._http_requests, deque)
+        self.assertIsInstance(session._dhcp_leases, deque)
+        self.assertIsInstance(session._eapol_events, deque)
+        self.assertIsInstance(session._credentials, deque)
+        self.assertEqual(session._dns_queries.maxlen, LiveDecryptionSession.MAX_ENTRIES)
+
+    def test_bounded_deque_evicts_oldest(self):
+        """When maxlen is exceeded, oldest entries should be evicted."""
+        session = LiveDecryptionSession()
+        # Override maxlen with a small value for testing
+        from collections import deque
+        session._dns_queries = deque(maxlen=3)
+        for i in range(5):
+            session._dns_queries.append({"query": f"test{i}.com"})
+        # Only the last 3 should remain
+        self.assertEqual(len(session._dns_queries), 3)
+        self.assertEqual(session._dns_queries[0]["query"], "test2.com")
+        self.assertEqual(session._dns_queries[2]["query"], "test4.com")
 
     # ─── Context Manager Tests ────────────────────────────────────────────────
 

@@ -213,6 +213,8 @@ class EnhancedMonitorManager:
             self.state.monitor_active = False
             self.state.current_name = self.state.original_name
             log.info(f"Monitor mode disabled, restored: {self.state.original_name}")
+            # Unregister the atexit handler since cleanup is no longer needed
+            atexit.unregister(self.cleanup)
         else:
             log.error("Failed to disable monitor mode cleanly")
             self.state.errors.append("Disable failed")
@@ -564,7 +566,7 @@ class EnhancedMonitorManager:
                 signal.signal(signal.SIGTERM, self._signal_handler)
             except (ValueError, OSError):
                 # Cannot set signal handlers outside main thread
-                log.debug("Could not register signal handlers (not in main thread)")
+                log.warning("Could not register signal handlers (not in main thread)")
 
         self._cleanup_registered = True
         log.debug("Cleanup handlers registered (atexit + signals)")

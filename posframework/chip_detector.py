@@ -66,7 +66,15 @@ class ChipInfo:
 
 @dataclass
 class MonitorMethod:
-    """A monitor mode activation method with priority and command info."""
+    """
+    A monitor mode activation method with priority and command info.
+
+    Note: commands_up and commands_down are informational reference commands
+    showing what each method would execute. The actual interface name is
+    substituted at runtime by EnhancedMonitorManager, which dispatches on
+    method.name and uses the live interface state directly. These fields
+    serve as documentation for debugging and logging.
+    """
     name: str                         # 'airmon-ng', 'iw', 'driver'
     priority: int = 0                 # Higher = preferred
     commands_up: List[List[str]] = field(default_factory=list)

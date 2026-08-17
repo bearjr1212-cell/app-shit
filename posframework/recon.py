@@ -664,8 +664,9 @@ class ReconEngine:
         try:
             self.db.log_decrypted_event(protocol, data)
         except (AttributeError, TypeError):
-            # Database may not have log_decrypted_event yet
-            pass
+            # Database does not implement log_decrypted_event;
+            # data is retained in the LiveDecryptionSession summary instead.
+            log.debug(f"[DECRYPT] Stored event: {protocol}")
     
     def enable_verbose(self):
         """Enable verbose mode to show all packets, not just POS."""
