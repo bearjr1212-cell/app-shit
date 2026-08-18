@@ -369,6 +369,11 @@ except ImportError:
     RadioManager = None
 
 try:
+    from .load_balancer import LoadBalancer
+except ImportError:
+    LoadBalancer = None
+
+try:
     from .monitor_manager import EnhancedMonitorManager
 except ImportError:
     EnhancedMonitorManager = None
@@ -714,6 +719,7 @@ class TerminalUI:
         self.plugin_manager = None
         self.capability_manager = None
         self.radio_manager = None
+        self.load_balancer = None
         self.monitor_manager = None
         self.chip_detector = None
         self.session_manager = None
@@ -752,6 +758,11 @@ class TerminalUI:
         if RadioManager is not None:
             try:
                 self.radio_manager = RadioManager()
+            except Exception:
+                pass
+        if LoadBalancer is not None and self.radio_manager is not None:
+            try:
+                self.load_balancer = LoadBalancer(self.radio_manager)
             except Exception:
                 pass
         if EnhancedMonitorManager is not None:
@@ -1879,6 +1890,10 @@ class TerminalUI:
 
         # Common: interface
         iface = self.monitor_iface
+
+        # If load balancer is available, include pool interfaces for parallel use
+        if self.load_balancer is not None:
+            kwargs["interfaces"] = []  # placeholder for pool-based engines
 
         # Get target info
         target_bssid = ""
