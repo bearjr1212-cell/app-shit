@@ -415,6 +415,12 @@ try:
 except ImportError:
     Horst = None
 
+# ---- Attack Persistence (auto-save/auto-load vectors live) ----
+try:
+    from .attack_persistence import AttackPersistence
+except ImportError:
+    AttackPersistence = None
+
 
 # ---- Version ----
 VERSION = "3.0.0"
@@ -756,6 +762,17 @@ class TerminalUI:
         # Initialize infrastructure
         self._init_infrastructure()
 
+        # Attack persistence: live auto-save/auto-load of vectors and targets
+        self.attack_persistence: Optional[Any] = None
+        if AttackPersistence is not None:
+            try:
+                self.attack_persistence = AttackPersistence()
+            except Exception:
+                pass
+
+        # Live-load persisted attack state on startup
+        self._load_persisted_state()
+
         # UI state
         self.status_message = "Ready"
         self.last_refresh = 0
@@ -809,6 +826,119 @@ class TerminalUI:
                 self.session_manager = SessionManager()
             except Exception:
                 pass
+
+    # ================================================================
+    # ATTACK STATE PERSISTENCE (live save/load)
+    # ================================================================
+
+    def _load_persisted_state(self) -> None:
+        """Load persisted attack state and populate UI fields (live load).
+
+        Called at startup to immediately restore targets, attack vectors,
+        and settings from the last session.
+        """
+        if not self.attack_persistence:
+            return
+        try:
+            state = self.attack_persistence.load()
+            if not state:
+                return
+
+            # Restore selected target
+            if state.get("selected_target"):
+                self.selected_target = state["selected_target"]
+
+            # Restore selected client
+            if state.get("selected_client"):
+                self.selected_client = state["selected_client"]
+
+            # Restore settings
+            settings = state.get("settings", {})
+            if settings.get("monitor_iface"):
+                self.monitor_iface = settings["monitor_iface"]
+            if settings.get("ap_iface"):
+                self.ap_iface = settings["ap_iface"]
+            if "use_5ghz" in settings:
+                self.use_5ghz = bool(settings["use_5ghz"])
+                self.channels = (
+                    (CHANNELS_24GHZ + CHANNELS_5GHZ)
+                    if self.use_5ghz
+                    else CHANNELS_24GHZ
+                )
+            if "rssi_limit" in settings:
+                try:
+                    self.rssi_limit = int(settings["rssi_limit"])
+                except (ValueError, TypeError):
+                    pass
+            if "recon_duration" in settings:
+                try:
+                    self.recon_duration = int(settings["recon_duration"])
+                except (ValueError, TypeError):
+                    pass
+            if settings.get("mitm_target_ip"):
+                self.mitm_target_ip = settings["mitm_target_ip"]
+            if settings.get("mitm_gateway_ip"):
+                self.mitm_gateway_ip = settings["mitm_gateway_ip"]
+            if settings.get("dns_spoof_domain"):
+                self.dns_spoof_domain = settings["dns_spoof_domain"]
+            if settings.get("wordlist_path"):
+                self.wordlist_path = settings["wordlist_path"]
+            if settings.get("cracking_mode"):
+                self.cracking_mode = settings["cracking_mode"]
+
+            log.info("Attack state loaded live from persisted file")
+        except Exception as e:
+            log.warning("Failed to load persisted attack state: %s", e)
+
+    def _save_attack_state(self) -> None:
+        """Save current attack state to disk immediately (live save).
+
+        Called after every target selection, attack toggle, or settings change
+        to persist vectors live.
+        """
+        if not self.attack_persistence:
+            return
+        try:
+            # Collect enabled attacks across all engine groups
+            enabled_attacks: Dict[str, bool] = {}
+            for key, eng in self.wifi_attacks.items():
+                enabled_attacks[f"wifi_{key}"] = eng.is_running
+            for key, eng in self.cred_attacks.items():
+                enabled_attacks[f"cred_{key}"] = eng.is_running
+            for key, eng in self.mitm_attacks.items():
+                enabled_attacks[f"mitm_{key}"] = eng.is_running
+            for key, eng in self.network_modules.items():
+                enabled_attacks[f"network_{key}"] = eng.is_running
+            for key, eng in self.intel_modules.items():
+                enabled_attacks[f"intel_{key}"] = eng.is_running
+            for key, eng in self.ble_sdr_modules.items():
+                enabled_attacks[f"ble_sdr_{key}"] = eng.is_running
+
+            # Build settings snapshot
+            settings = {
+                "monitor_iface": self.monitor_iface,
+                "ap_iface": self.ap_iface,
+                "use_5ghz": self.use_5ghz,
+                "channels": list(self.channels) if self.channels else [],
+                "rssi_limit": self.rssi_limit,
+                "recon_duration": self.recon_duration,
+                "mitm_target_ip": self.mitm_target_ip,
+                "mitm_gateway_ip": self.mitm_gateway_ip,
+                "dns_spoof_domain": self.dns_spoof_domain,
+                "wordlist_path": self.wordlist_path,
+                "cracking_mode": self.cracking_mode,
+            }
+
+            state = self.attack_persistence.build_state(
+                selected_target=self.selected_target,
+                selected_client=self.selected_client,
+                enabled_attacks=enabled_attacks,
+                attack_params={},
+                settings=settings,
+            )
+            self.attack_persistence.save(state)
+        except Exception as e:
+            log.warning("Failed to save attack state: %s", e)
 
     # ================================================================
     # PUBLIC API
@@ -1806,11 +1936,13 @@ class TerminalUI:
             aps = self._get_access_points()
             if aps and self.selected_target_idx < len(aps):
                 self.selected_target = aps[self.selected_target_idx]
+                self._save_attack_state()
                 self._show_ap_attack_popup()
         else:
             clients = self._get_clients()
             if clients and self.selected_client_idx < len(clients):
                 self.selected_client = clients[self.selected_client_idx]
+                self._save_attack_state()
                 self._show_client_attack_popup()
 
     def _show_ap_attack_popup(self):
@@ -2034,6 +2166,7 @@ class TerminalUI:
                 self.status_message = f"Started: {engine.name}"
             else:
                 self.status_message = f"Stopped: {engine.name}"
+            self._save_attack_state()
 
     # ================================================================
     # CREDENTIAL ATTACK ACTIONS
@@ -2051,6 +2184,7 @@ class TerminalUI:
                 self.status_message = f"Started: {engine.name}"
             else:
                 self.status_message = f"Stopped: {engine.name}"
+            self._save_attack_state()
 
     # ================================================================
     # MITM ACTIONS
@@ -2068,6 +2202,7 @@ class TerminalUI:
                 self.status_message = f"Started: {engine.name}"
             else:
                 self.status_message = f"Stopped: {engine.name}"
+            self._save_attack_state()
 
     # ================================================================
     # NETWORK ACTIONS
@@ -2254,21 +2389,25 @@ class TerminalUI:
             self.signal_targeting_enabled = not self.signal_targeting_enabled
         elif self.menu_selected == 7:
             self.verbose_mode = not self.verbose_mode
+        self._save_attack_state()
 
     def _set_monitor_iface(self, value):
         """Set monitor interface."""
         if value:
             self.monitor_iface = value
+            self._save_attack_state()
 
     def _set_ap_iface(self, value):
         """Set AP interface."""
         if value:
             self.ap_iface = value
+            self._save_attack_state()
 
     def _set_rssi_limit(self, value):
         """Set RSSI limit."""
         try:
             self.rssi_limit = int(value)
+            self._save_attack_state()
         except ValueError:
             pass
 
@@ -2276,6 +2415,7 @@ class TerminalUI:
         """Set recon duration."""
         try:
             self.recon_duration = int(value)
+            self._save_attack_state()
         except ValueError:
             pass
 
