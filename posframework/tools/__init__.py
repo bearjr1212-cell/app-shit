@@ -59,6 +59,11 @@ TOOL_REGISTRY = {
     "ip": {"binary": "ip", "category": "interface", "required_for": ["network_config"]},
     "iptables": {"binary": "iptables", "category": "firewall", "required_for": ["nat", "redirect"]},
     "tcpdump": {"binary": "tcpdump", "category": "capture", "required_for": ["raw_capture"]},
+    # Intelligence & Analysis
+    "p0f": {"binary": "p0f", "category": "fingerprint", "required_for": ["os_fingerprint", "passive_recon"]},
+    "kismet": {"binary": "kismet", "category": "intel", "required_for": ["wifi_intel", "device_discovery"]},
+    "airgraph-ng": {"binary": "airgraph-ng", "category": "visualization", "required_for": ["network_graph", "relationship_map"]},
+    "horst": {"binary": "horst", "category": "scanning", "required_for": ["link_scan", "channel_analysis"]},
 }
 
 

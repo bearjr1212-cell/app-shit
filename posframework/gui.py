@@ -394,6 +394,27 @@ except ImportError:
     parse_cidr = None
     get_interface_ip = None
 
+# ---- Intelligence & Analysis tool wrappers ----
+try:
+    from .tools.p0f import P0F
+except ImportError:
+    P0F = None
+
+try:
+    from .tools.kismet import KismetClient
+except ImportError:
+    KismetClient = None
+
+try:
+    from .tools.airgraph import AirgraphNG
+except ImportError:
+    AirgraphNG = None
+
+try:
+    from .tools.horst import Horst
+except ImportError:
+    Horst = None
+
 
 # ---- Version ----
 VERSION = "3.0.0"
@@ -659,6 +680,14 @@ class TerminalUI:
             "ipp": EngineStatus("IPP Scanner", IPPScanner),
             "print_intercept": EngineStatus("Print Interceptor", PrintJobInterceptor),
             "printer_creds": EngineStatus("Printer Credentials", PrinterCredentialHarvester),
+        }
+
+        # Intelligence & Analysis engines
+        self.intel_modules = {
+            "p0f": EngineStatus("P0F OS Fingerprint", P0F),
+            "kismet": EngineStatus("Kismet WiFi Intel", KismetClient),
+            "airgraph": EngineStatus("Airgraph-NG Visualizer", AirgraphNG),
+            "horst": EngineStatus("Horst Link Scanner", Horst),
         }
 
         # BLE/SDR engines
