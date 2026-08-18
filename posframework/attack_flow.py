@@ -156,6 +156,10 @@ class ReconAttackFlow:
                     self._results["errors"].append("Environment setup failed")
                     return self._results
 
+            # Initialize variables for later phases
+            targets = []
+            attack_plans = []
+
             # Phase 1: Passive Recon
             if not self._check_stop():
                 recon_duration = self._calculate_recon_time()
@@ -280,14 +284,36 @@ class ReconAttackFlow:
                 log.info(f"  Monitor mode: enabled on {self.interface}")
                 return True
             else:
-                log.warning("  Monitor mode: could not enable, attempting to proceed")
-                # Some interfaces may already be in monitor mode
-                return True
+                # Check if the interface is already in monitor mode
+                # (e.g., user pre-configured it) before giving up
+                if self._is_already_monitor_mode():
+                    log.info(f"  Monitor mode: {self.interface} already in monitor mode")
+                    return True
+                log.error("  Monitor mode: could not enable and interface is not in monitor mode")
+                return False
 
+        except ImportError as e:
+            log.error(f"  Monitor mode module not available: {e}")
+            return False
         except Exception as e:
             log.warning(f"  Monitor mode setup error: {e}")
-            # Non-fatal: interface may already be in monitor mode
-            return True
+            # Check if already in monitor mode as a fallback
+            if self._is_already_monitor_mode():
+                log.info(f"  Monitor mode: {self.interface} already in monitor mode (setup error ignored)")
+                return True
+            return False
+
+    def _is_already_monitor_mode(self) -> bool:
+        """Check if the interface is already in monitor mode."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["iw", "dev", self.interface, "info"],
+                capture_output=True, text=True, timeout=5
+            )
+            return "type monitor" in result.stdout
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
 
     def _load_plugins(self):
         """Load plugins if plugin system is available."""

@@ -35,12 +35,17 @@ class IsolationDetector:
         self._traffic_log = []
         self._running = False
 
-    def _isolation_test(self):
+    def _isolation_test(self, timeout=30):
         """
         Actively test for isolation by:
         1. Capturing client ARP traffic
         2. Attempting to respond to ARP requests from other clients
         3. If no responses, isolation is likely enabled
+
+        WARNING: This method is BLOCKING for the duration of `timeout` seconds.
+
+        Args:
+            timeout: How long to sniff for ARP traffic (seconds).
         """
         def pkt_handler(pkt):
             if not pkt.haslayer(Dot11):
@@ -56,7 +61,7 @@ class IsolationDetector:
                     elif pkt[ARP].op == 2:  # ARP response
                         self._traffic_log.append(("resp", client_mac, time.time()))
 
-        sniff(iface=self.interface, prn=pkt_handler, store=0, timeout=30)
+        sniff(iface=self.interface, prn=pkt_handler, store=0, timeout=timeout)
         self._analyze_traffic()
 
     def _analyze_traffic(self):
@@ -78,12 +83,24 @@ class IsolationDetector:
                        f"({len(requests)} requests, {len(responses)} responses)")
 
     def detect(self, timeout=30):
-        """Run isolation detection test."""
+        """Run isolation detection test.
+
+        WARNING: This method is BLOCKING — it calls scapy's sniff() internally
+        and will not return until `timeout` seconds have elapsed.
+        Callers should run this in a background thread if non-blocking
+        behavior is needed.
+
+        Args:
+            timeout: Duration in seconds to sniff for ARP traffic (default: 30).
+
+        Returns:
+            True if AP client isolation was detected, False otherwise.
+        """
         if self._isolation_detected:
             return True  # Already detected
 
-        log.info(f"Testing AP isolation for {self.bssid}...")
-        self._isolation_test()
+        log.info(f"Testing AP isolation for {self.bssid} ({timeout}s)...")
+        self._isolation_test(timeout=timeout)
         return self._isolation_detected
 
     def is_isolated(self):

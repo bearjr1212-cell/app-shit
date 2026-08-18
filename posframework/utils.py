@@ -14,8 +14,14 @@ import time
 import threading
 from typing import Optional, Tuple
 
-from scapy.all import ARP, Ether, sendp, srp, get_if_hwaddr
-from scapy.layers.dot11 import Dot11, Dot11Beacon, Dot11Elt, RadioTap
+try:
+    from scapy.all import ARP, Ether, sendp, srp, get_if_hwaddr
+    from scapy.layers.dot11 import Dot11, Dot11Beacon, Dot11Elt, RadioTap
+    _HAS_SCAPY = True
+except ImportError:
+    _HAS_SCAPY = False
+    ARP = Ether = sendp = srp = get_if_hwaddr = None
+    Dot11 = Dot11Beacon = Dot11Elt = RadioTap = None
 
 from .config import IS_LINUX, IS_WINDOWS, NETWORK_GW_IP, log
 
@@ -113,6 +119,8 @@ class ARPSpoofer:
 
     def __init__(self, interface: str, target_ip: str, gateway_ip: str,
                  interval: float = 2.0):
+        if not _HAS_SCAPY:
+            raise ImportError("scapy is required for ARPSpoofer")
         self.interface = interface
         self.target_ip = target_ip
         self.gateway_ip = gateway_ip
@@ -203,7 +211,12 @@ def build_beacon_frame(ssid: str, src_mac: str, channel: int = 6,
     
     Returns:
         Raw bytes of the complete frame (RadioTap + Dot11 + Beacon + IEs)
+    
+    Raises:
+        ImportError: If scapy is not available.
     """
+    if not _HAS_SCAPY:
+        raise ImportError("scapy is required for build_beacon_frame")
     frame = (
         RadioTap() /
         Dot11(type=0, subtype=8, addr1="ff:ff:ff:ff:ff:ff",

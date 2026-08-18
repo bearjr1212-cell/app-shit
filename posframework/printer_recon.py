@@ -208,19 +208,28 @@ class PrinterRecon:
 
     def _build_snmp_get(self, community, oid):
         """Build a simple SNMPv1 GET request packet."""
-        # Encode OID
+        # Encode OID sub-identifiers into BER format
         oid_parts = [int(x) for x in oid.split(".")]
-        encoded_oid = bytes([0x06, len(oid_parts) + 1])
-        # First two OID components are encoded specially
-        encoded_oid += bytes([oid_parts[0] * 40 + oid_parts[1]])
+
+        # First two OID components are encoded specially per BER rules
+        oid_body = bytes([oid_parts[0] * 40 + oid_parts[1]])
         for part in oid_parts[2:]:
             if part < 128:
-                encoded_oid += bytes([part])
-            else:
-                # Multi-byte encoding
+                oid_body += bytes([part])
+            elif part < 16384:
+                # 2-byte encoding for values 128-16383
                 high = (part >> 7) | 0x80
                 low = part & 0x7F
-                encoded_oid += bytes([high, low])
+                oid_body += bytes([high, low])
+            else:
+                # 3-byte encoding for values 16384-2097151
+                b1 = (part >> 14) | 0x80
+                b2 = ((part >> 7) & 0x7F) | 0x80
+                b3 = part & 0x7F
+                oid_body += bytes([b1, b2, b3])
+
+        # OID TLV: type=0x06, length=actual encoded byte count, value=oid_body
+        encoded_oid = bytes([0x06, len(oid_body)]) + oid_body
 
         # Variable binding: OID + NULL value
         varbind = encoded_oid + b"\x05\x00"

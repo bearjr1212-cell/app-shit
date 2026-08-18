@@ -16,6 +16,7 @@ import time
 import threading
 import sys
 from collections import defaultdict
+from functools import lru_cache
 
 from scapy.all import sniff, raw, conf, Raw
 from scapy.layers.dot11 import (
@@ -124,38 +125,20 @@ class ReconEngine:
         self._intel_enricher = intel_enricher
 
     _VENDOR_CACHE_MAX = 1024
-    _VENDOR_CACHE_TTL = 60  # seconds
 
+    @lru_cache(maxsize=1024)
     def _get_vendor(self, mac: str) -> str:
-        """Lookup vendor with bounded TTL cache (max 1024 entries, 60s TTL)."""
-        now = time.time()
-        cache = getattr(self, '_vendor_cache', None)
-        if cache is None:
-            self._vendor_cache = {}
-            cache = self._vendor_cache
+        """Lookup vendor from MAC OUI with LRU caching (O(1) eviction).
 
-        entry = cache.get(mac)
-        if entry is not None:
-            value, ts = entry
-            if now - ts < self._VENDOR_CACHE_TTL:
-                return value
-            # Expired, remove it
-            del cache[mac]
-
-        # Evict oldest entries if at capacity
-        if len(cache) >= self._VENDOR_CACHE_MAX:
-            # Remove ~25% oldest entries
-            sorted_keys = sorted(cache, key=lambda k: cache[k][1])
-            for k in sorted_keys[:len(sorted_keys) // 4]:
-                del cache[k]
-
+        Uses functools.lru_cache with maxsize=1024 for automatic
+        least-recently-used eviction. No manual TTL — the manuf database
+        doesn't change at runtime so cached entries remain valid.
+        """
         try:
             v = self.parser.get_manuf(mac)
-            result = v if v else "Unknown"
+            return v if v else "Unknown"
         except Exception:
-            result = "Unknown"
-        cache[mac] = (result, now)
-        return result
+            return "Unknown"
 
     def _set_channel(self, channel: int):
         """Set channel — uses native C wrapper for speed, falls back to iw subprocess."""
@@ -443,7 +426,7 @@ class ReconEngine:
         if ssid:
             pkt_str += f" | '{ssid}'"
         
-        print(Colors.color(pkt_str, color))
+        log.debug(Colors.color(pkt_str, color))
 
     def _handle_beacon(self, pkt, rssi):
         bssid = pkt.addr3
@@ -580,7 +563,7 @@ class ReconEngine:
                     break
                 elt = elt.payload.getlayer(Dot11Elt) if elt.payload else None
             if ssid:
-                print(Colors.color(f"[Data] {client_mac} -> {bssid} | '{ssid}'", Colors.OKCYAN))
+                log.debug(Colors.color(f"[Data] {client_mac} -> {bssid} | '{ssid}'", Colors.OKCYAN))
 
     def _print_status(self):
         elapsed = time.time() - self._start_time

@@ -250,19 +250,23 @@ class HashcatIntegration:
                         self._progress["status"] = "cracked"
 
     def _import_outfile(self):
-        """Import cracked passwords from hashcat output file."""
+        """Import cracked passwords from hashcat output file (deduplicated)."""
         if not self._outfile or not os.path.isfile(self._outfile):
             return
+
+        # Build set of already-known passwords to avoid duplicates
+        known_passwords = {entry["password"] for entry in self._cracked}
 
         try:
             with open(self._outfile, "r") as f:
                 for line in f:
                     password = line.strip()
-                    if password:
+                    if password and password not in known_passwords:
                         self._cracked.append({
                             "password": password,
                             "timestamp": time.time()
                         })
+                        known_passwords.add(password)
                         log.critical(f"HASHCAT CRACKED: {password}")
         except (OSError, IOError) as e:
             log.error(f"Failed to read hashcat output: {e}")

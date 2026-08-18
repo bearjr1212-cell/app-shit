@@ -242,7 +242,14 @@ class TargetAnalyzer:
         self.config = config or TargetAnalyzerConfig()
         self._targets: Dict[str, Target] = {}
         self._priority_queue: List[Target] = []
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None  # Lazily created to avoid event loop binding issues
+
+    @property
+    def _async_lock(self) -> asyncio.Lock:
+        """Lazily create the asyncio.Lock on first access (avoids pre-loop creation issues)."""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def process_scan_results(
         self,
@@ -250,7 +257,7 @@ class TargetAnalyzer:
         target_type: TargetType = TargetType.WIFI_AP,
     ) -> List[Target]:
         """Process scan results and update target database."""
-        async with self._lock:
+        async with self._async_lock:
             new_targets: List[Target] = []
 
             for result in results:
@@ -370,7 +377,7 @@ class TargetAnalyzer:
 
     async def get_next_targets(self, count: int = 1) -> List[Target]:
         """Get next targets to attack."""
-        async with self._lock:
+        async with self._async_lock:
             targets: List[Target] = []
             now = datetime.now()
 
@@ -401,7 +408,7 @@ class TargetAnalyzer:
 
     async def mark_attacking(self, target_id: str) -> None:
         """Mark target as currently being attacked."""
-        async with self._lock:
+        async with self._async_lock:
             if target_id in self._targets:
                 target = self._targets[target_id]
                 target.status = TargetStatus.ATTACKING
@@ -414,7 +421,7 @@ class TargetAnalyzer:
         capture_type: str = "handshake",
     ) -> None:
         """Mark target as captured."""
-        async with self._lock:
+        async with self._async_lock:
             if target_id in self._targets:
                 target = self._targets[target_id]
                 target.status = TargetStatus.CAPTURED
@@ -435,7 +442,7 @@ class TargetAnalyzer:
         password: str,
     ) -> None:
         """Mark target as cracked."""
-        async with self._lock:
+        async with self._async_lock:
             if target_id in self._targets:
                 target = self._targets[target_id]
                 target.status = TargetStatus.CRACKED
@@ -450,7 +457,7 @@ class TargetAnalyzer:
         reason: str = "",
     ) -> None:
         """Mark attack as failed."""
-        async with self._lock:
+        async with self._async_lock:
             if target_id in self._targets:
                 target = self._targets[target_id]
                 target.failed_attacks.append(attack_type)
@@ -465,7 +472,7 @@ class TargetAnalyzer:
 
     async def add_client(self, ap_bssid: str, client_mac: str) -> None:
         """Add a client to an AP target."""
-        async with self._lock:
+        async with self._async_lock:
             if ap_bssid in self._targets:
                 target = self._targets[ap_bssid]
                 if client_mac not in target.active_clients:

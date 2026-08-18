@@ -134,9 +134,16 @@ def list_interfaces():
 
 
 def build_parser():
+    from . import __version__
+
     parser = argparse.ArgumentParser(
         description="POS Recon & Attack Framework v2 (Stage 2 Enhanced)",
         epilog="Scanned values auto-feed attack modules. No manual targeting required.")
+
+    # Version flag
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__}",
+                        help="Show framework version and exit")
 
     # Global config arguments (before subcommand)
     parser.add_argument("--config", dest="config_file", default=None,
@@ -165,7 +172,9 @@ def build_parser():
     attack.add_argument("--no-beacons", action="store_true")
     attack.add_argument("--no-karma", action="store_true", help="Disable KARMA attack")
     attack.add_argument("--no-isolation-check", action="store_true", help="Skip isolation detection")
-    attack.add_argument("--rssi-limit", type=int, default=-80, help="Min RSSI for deauth targets")
+    attack.add_argument("--rssi-limit", type=int, default=-80,
+                        choices=range(-100, 1), metavar="DBM",
+                        help="Min RSSI for deauth targets in dBm (-100 to 0, default: -80)")
     attack.add_argument("--test-creds", action="store_true", help="Test captured credentials")
     attack.add_argument("-t", "--target", default=None, help="Target BSSID (auto if omitted)")
     attack.add_argument("--enable-ap-clone", action="store_true", help="Enable AP auto-clone after deauth")
@@ -184,7 +193,9 @@ def build_parser():
     full.add_argument("--recon-time", type=int, default=60)
     full.add_argument("--no-beacons", action="store_true")
     full.add_argument("--no-karma", action="store_true")
-    full.add_argument("--rssi-limit", type=int, default=-80)
+    full.add_argument("--rssi-limit", type=int, default=-80,
+                      choices=range(-100, 1), metavar="DBM",
+                      help="Min RSSI for deauth targets in dBm (-100 to 0, default: -80)")
     full.add_argument("--test-creds", action="store_true")
     full.add_argument("--enable-ap-clone", action="store_true", help="Enable AP auto-clone after deauth")
     full.add_argument("--enable-krack", action="store_true", help="Enable KRACK attack on captured handshakes")
@@ -226,9 +237,13 @@ def build_parser():
     auto.add_argument("--5ghz", dest="use_5ghz", action="store_true",
                       help="Include 5GHz channels in scan")
     auto.add_argument("--auto-duration", type=int, default=300,
-                      help="Total operation time in seconds (default: 300)")
+                      choices=range(10, 86401),
+                      metavar="SECONDS",
+                      help="Total operation time in seconds (10-86400, default: 300)")
     auto.add_argument("--auto-max-targets", type=int, default=3,
-                      help="Maximum number of targets to attack (default: 3)")
+                      choices=range(1, 51),
+                      metavar="N",
+                      help="Maximum number of targets to attack (1-50, default: 3)")
     auto.add_argument("--stealth", action="store_true",
                       help="Use slower/quieter techniques for reduced detection")
     auto.add_argument("--plugins-dir", default=None,
@@ -362,53 +377,60 @@ def main():
 
     if args.mode == "recon":
         db = POSDatabase()
-        # Create intel enricher for background tool integration
-        enricher = IntelEnricher(interface=args.interface, db=db)
-        scanner = ReconEngine(args.interface, db, channels=channels,
-                              intel_enricher=enricher)
-        if getattr(args, 'verbose', False):
-            scanner.enable_verbose()
-        log.info("Starting passive recon (Ctrl+C to stop, 'a' to stop and attack)...")
+        scanner = None
+        try:
+            # Create intel enricher for background tool integration
+            enricher = IntelEnricher(interface=args.interface, db=db)
+            scanner = ReconEngine(args.interface, db, channels=channels,
+                                  intel_enricher=enricher)
+            if getattr(args, 'verbose', False):
+                scanner.enable_verbose()
+            log.info("Starting passive recon (Ctrl+C to stop, 'a' to stop and attack)...")
 
-        # Run recon in a thread so we can monitor stdin for 'a' keypress
-        recon_thread = threading.Thread(
-            target=scanner.start, kwargs={"timeout": args.timeout}, daemon=True
-        )
-        recon_thread.start()
-
-        # Monitor for 'a' keypress to transition to attack mode
-        attack_requested = _monitor_for_attack_key(recon_thread, scanner)
-
-        # Ensure scanner is stopped
-        if scanner.running:
-            scanner.stop()
-        recon_thread.join(timeout=5)
-
-        stats = db.get_stats()
-        log.info(f"Final: {stats['access_points']} APs ({stats['pos_access_points']} POS), "
-                 f"{stats['clients']} clients ({stats['pos_clients']} POS)")
-
-        if attack_requested:
-            log.info("=" * 60)
-            log.info("TRANSITIONING TO ATTACK MODE (using discovered targets)")
-            log.info("=" * 60)
-            # Auto-transition to attack with partial recon data
-            ap_iface = getattr(args, 'ap_interface', DEFAULT_AP_IFACE)
-            orchestrator = AttackOrchestrator(
-                monitor_iface=args.interface,
-                ap_iface=ap_iface,
-                db=db,
-                channels=channels,
-                recon_duration=0,  # Skip recon phase - we already have data
+            # Run recon in a thread so we can monitor stdin for 'a' keypress
+            recon_thread = threading.Thread(
+                target=scanner.start, kwargs={"timeout": args.timeout}, daemon=True
             )
-            if orchestrator.start():
-                while orchestrator.running:
-                    time.sleep(1)
-            else:
-                log.error("Attack failed to start (no targets found)")
-                db.close()
-                sys.exit(1)
-        else:
+            recon_thread.start()
+
+            # Monitor for 'a' keypress to transition to attack mode
+            attack_requested = _monitor_for_attack_key(recon_thread, scanner)
+
+            # Ensure scanner is stopped
+            if scanner.running:
+                scanner.stop()
+            recon_thread.join(timeout=5)
+
+            stats = db.get_stats()
+            log.info(f"Final: {stats['access_points']} APs ({stats['pos_access_points']} POS), "
+                     f"{stats['clients']} clients ({stats['pos_clients']} POS)")
+
+            if attack_requested:
+                log.info("=" * 60)
+                log.info("TRANSITIONING TO ATTACK MODE (using discovered targets)")
+                log.info("=" * 60)
+                # Auto-transition to attack with partial recon data
+                ap_iface = getattr(args, 'ap_interface', DEFAULT_AP_IFACE)
+                orchestrator = AttackOrchestrator(
+                    monitor_iface=args.interface,
+                    ap_iface=ap_iface,
+                    db=db,
+                    channels=channels,
+                    recon_duration=0,  # Skip recon phase - we already have data
+                )
+                if orchestrator.start():
+                    while orchestrator.running:
+                        time.sleep(1)
+                else:
+                    log.error("Attack failed to start (no targets found)")
+                    sys.exit(1)
+        except Exception as e:
+            log.error(f"Recon mode error: {e}")
+            sys.exit(1)
+        finally:
+            # Always clean up resources regardless of how we exit
+            if scanner and scanner.running:
+                scanner.stop()
             db.close()
 
     elif args.mode == "attack":

@@ -451,11 +451,20 @@ class LoadBalancer:
     async def _acquire_single(
         self, iface: RadioInterface, task: TaskType
     ) -> Optional[RadioInterface]:
-        """Acquire a single interface and update workload tracking."""
-        # Directly assign the task (we already hold the lock and verified availability)
+        """Acquire a single interface and update workload tracking.
+
+        Updates both the interface state AND the RadioManager's internal
+        stats to keep them in sync (prevents the RM from thinking the
+        interface is still available).
+        """
+        # Assign the task on the interface object
         iface.current_task = task
         from datetime import datetime, timezone
         iface.assigned_at = datetime.now(timezone.utc)
+
+        # Keep RadioManager stats in sync
+        async with self._radio_manager._lock:
+            self._radio_manager._stats["tasks_assigned"] += 1
 
         workload = self._workloads.get(iface.name)
         if workload:
@@ -467,7 +476,22 @@ class LoadBalancer:
     async def _release_single(
         self, iface: RadioInterface, error: Optional[str] = None
     ) -> None:
-        """Release a single interface and update workload tracking."""
+        """Release a single interface and update workload tracking.
+
+        Resets the interface task and updates both local workload tracking
+        and RadioManager stats.
+        """
+        # Reset the interface state
+        iface.current_task = TaskType.IDLE
+        iface.assigned_at = None
+
+        # Keep RadioManager stats in sync
+        async with self._radio_manager._lock:
+            if error:
+                self._radio_manager._stats["errors"] += 1
+            else:
+                self._radio_manager._stats["tasks_completed"] += 1
+
         workload = self._workloads.get(iface.name)
 
         if error and workload:

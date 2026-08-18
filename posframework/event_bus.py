@@ -235,8 +235,12 @@ class EventBus:
             loop = asyncio.get_running_loop()
             loop.call_soon_threadsafe(self._queue.put_nowait, event)
         except RuntimeError:
-            # No running loop - queue directly
-            self._queue.put_nowait(event)
+            # No running loop - queue directly (safe: asyncio.Queue is unbounded by default)
+            try:
+                self._queue.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning("Event bus queue full, dropping event: %s", event_type.name)
+                return event
         self._stats["events_published"] += 1
         return event
 

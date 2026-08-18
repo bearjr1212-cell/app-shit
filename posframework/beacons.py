@@ -105,6 +105,11 @@ class KnownBeaconsEngine:
                 self._frames_dirty = False
                 self._offset = 0
 
+            # Guard against empty frames list (e.g., if _ssid_list was cleared)
+            if not self._frames:
+                time.sleep(0.1)
+                continue
+
             now = time.time()
             if now - self._last_rotate > KNOWN_BEACON_ROTATE:
                 self._offset = (self._offset + KNOWN_BEACON_BATCH) % len(self._frames)

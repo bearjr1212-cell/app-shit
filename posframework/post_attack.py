@@ -63,10 +63,13 @@ class PostAttackAnalyzer:
         credentials = stats.get("credentials", 0)
         metrics["credential_capture_rate"] = round(credentials / max(total_clients, 1) * 100, 2)
 
-        # Handshake capture rate
+        # Handshake capture rate (percentage of clients with at least one complete handshake)
         total_clients = stats.get("clients", 1)
         handshakes = stats.get("eapol_frames", 0)
-        metrics["handshake_capture_rate"] = round(handshakes / max(total_clients, 1) * 25, 2)  # 4 frames per handshake
+        # A complete 4-way handshake requires 4 EAPOL frames
+        complete_handshakes = handshakes // 4
+        metrics["handshake_capture_rate"] = min(100.0, round(
+            complete_handshakes / max(total_clients, 1) * 100, 2))
 
         # POS target detection
         pos_aps = stats.get("pos_access_points", 0)

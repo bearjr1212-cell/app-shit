@@ -201,7 +201,12 @@ class CredentialTester:
         finally:
             # Cleanup
             try:
-                subprocess.run(["pkill", "wpa_supplicant"], stderr=subprocess.DEVNULL)
+                # Only kill wpa_supplicant instances using our test config,
+                # not all wpa_supplicant processes (which would break other connections)
+                subprocess.run(
+                    ["pkill", "-f", f"wpa_supplicant.*{config_path}"],
+                    stderr=subprocess.DEVNULL, timeout=5
+                )
                 import os
                 os.remove(config_path)
             except Exception:

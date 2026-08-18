@@ -24,9 +24,10 @@ class DNSSpoofEngine:
     Supports wildcard spoofing, domain-specific spoofing, and cache poisoning.
     """
 
-    def __init__(self, interface, spoof_ip=None):
+    def __init__(self, interface, spoof_ip=None, wildcard=False):
         self.interface = interface
         self.spoof_ip = spoof_ip or NETWORK_GW_IP
+        self.wildcard = wildcard  # If True, spoof ALL queries not just listed domains
         self.running = False
         self._spoofed_domains = {}
         self._blocked_domains = set()
@@ -133,8 +134,8 @@ class DNSSpoofEngine:
                 spoof_ip = ip
                 break
 
-        # Wildcard match - respond to all queries
-        if not spoof_ip and self._spoofed_domains:
+        # Wildcard match - only respond to all queries if wildcard mode is enabled
+        if not spoof_ip and self.wildcard and self._spoofed_domains:
             spoof_ip = self.spoof_ip
 
         if spoof_ip:
