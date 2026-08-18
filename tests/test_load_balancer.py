@@ -7,7 +7,17 @@ All tests run without WiFi hardware by using MockRadioManager.
 """
 
 import asyncio
-import pytest
+import sys
+import os
+
+# Allow running standalone without pytest
+try:
+    import pytest
+except ImportError:
+    pytest = None
+
+# Ensure posframework is importable when running standalone
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from posframework.radio_manager import (
     Band,
@@ -28,13 +38,13 @@ from posframework.load_balancer import (
 # FIXTURES
 # ================================================================
 
-
-@pytest.fixture
-def event_loop():
-    """Create a new event loop for each test."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+if pytest:
+    @pytest.fixture
+    def event_loop():
+        """Create a new event loop for each test."""
+        loop = asyncio.new_event_loop()
+        yield loop
+        loop.close()
 
 
 def run(coro):
@@ -46,25 +56,46 @@ def run(coro):
         loop.close()
 
 
-@pytest.fixture
-def mock_manager():
-    """Provide a discovered MockRadioManager with 4 interfaces."""
+if pytest:
+    @pytest.fixture
+    def mock_manager():
+        """Provide a discovered MockRadioManager with 4 interfaces."""
+        mgr = MockRadioManager(mock_interfaces=["wlan0", "wlan1", "wlan2", "wlan3"])
+        run(mgr.discover_interfaces())
+        return mgr
+
+    @pytest.fixture
+    def load_balancer(mock_manager):
+        """Provide an initialized LoadBalancer."""
+        lb = LoadBalancer(mock_manager)
+        run(lb.initialize())
+        return lb
+
+    @pytest.fixture
+    def mock_lb():
+        """Provide a fully set up MockLoadBalancer."""
+        mlb = MockLoadBalancer(mock_interfaces=["wlan0", "wlan1", "wlan2", "wlan3"])
+        run(mlb.setup())
+        return mlb
+
+
+def _make_mock_manager():
+    """Create a MockRadioManager for standalone tests."""
     mgr = MockRadioManager(mock_interfaces=["wlan0", "wlan1", "wlan2", "wlan3"])
     run(mgr.discover_interfaces())
     return mgr
 
 
-@pytest.fixture
-def load_balancer(mock_manager):
-    """Provide an initialized LoadBalancer."""
-    lb = LoadBalancer(mock_manager)
+def _make_load_balancer():
+    """Create an initialized LoadBalancer for standalone tests."""
+    mgr = _make_mock_manager()
+    lb = LoadBalancer(mgr)
     run(lb.initialize())
     return lb
 
 
-@pytest.fixture
-def mock_lb():
-    """Provide a fully set up MockLoadBalancer."""
+def _make_mock_lb():
+    """Create a MockLoadBalancer for standalone tests."""
     mlb = MockLoadBalancer(mock_interfaces=["wlan0", "wlan1", "wlan2", "wlan3"])
     run(mlb.setup())
     return mlb
@@ -419,3 +450,146 @@ class TestWorkloadTracking:
 
         run(load_balancer.release_pool(pool))
         assert wl.active_tasks == 0
+
+
+# ================================================================
+# STANDALONE RUNNER (when pytest is not available)
+# ================================================================
+
+if __name__ == "__main__":
+    passed = 0
+    failed = 0
+
+    def _run_test(name, func):
+        global passed, failed
+        try:
+            func()
+            print(f"  PASS: {name}")
+            passed += 1
+        except Exception as e:
+            print(f"  FAIL: {name} - {e}")
+            failed += 1
+
+    print("Running load_balancer tests (standalone)...\n")
+
+    # Pool acquisition
+    def test_acquire_pool_returns_multiple():
+        lb = _make_load_balancer()
+        pool = run(lb.acquire_pool(TaskType.SCAN, count=2))
+        assert len(pool) == 2
+        assert all(iface.current_task == TaskType.SCAN for iface in pool)
+
+    def test_acquire_pool_all_available():
+        lb = _make_load_balancer()
+        pool = run(lb.acquire_pool(TaskType.MONITOR))
+        assert len(pool) == 4
+
+    def test_acquire_pool_respects_count():
+        lb = _make_load_balancer()
+        pool = run(lb.acquire_pool(TaskType.SCAN, count=1))
+        assert len(pool) == 1
+
+    def test_acquire_pool_empty_when_none():
+        lb = _make_load_balancer()
+        run(lb.acquire_pool(TaskType.SCAN))
+        pool2 = run(lb.acquire_pool(TaskType.MONITOR, count=2))
+        assert pool2 == []
+
+    # Round-robin
+    def test_round_robin_rotates():
+        lb = _make_load_balancer()
+        pool1 = run(lb.acquire_pool(TaskType.SCAN, count=1, strategy="round_robin"))
+        first = pool1[0].name
+        run(lb.release_pool(pool1))
+        pool2 = run(lb.acquire_pool(TaskType.SCAN, count=1, strategy="round_robin"))
+        second = pool2[0].name
+        assert first != second
+
+    # Least-loaded
+    def test_least_loaded_prefers_idle():
+        lb = _make_load_balancer()
+        pool1 = run(lb.acquire_pool(TaskType.SCAN, count=1, strategy="least_loaded"))
+        first = pool1[0].name
+        pool2 = run(lb.acquire_pool(TaskType.MONITOR, count=1, strategy="least_loaded"))
+        second = pool2[0].name
+        assert first != second
+
+    # Band-split
+    def test_band_split_5ghz_first():
+        lb = _make_load_balancer()
+        pool = run(lb.acquire_pool(TaskType.SCAN, count=4, strategy="band_split"))
+        assert len(pool) == 4
+        # 5GHz should come before 2.4GHz
+        five_ghz = [i for i in pool if i.supports_5ghz]
+        two_ghz = [i for i in pool if not i.supports_5ghz]
+        assert len(five_ghz) >= 1
+        assert len(two_ghz) >= 1
+
+    # Health monitoring
+    def test_adapter_removed_after_errors():
+        lb = _make_load_balancer()
+        for i in range(ERROR_THRESHOLD):
+            run(lb.report_error("wlan0", f"error {i}"))
+        assert "wlan0" in lb.removed_adapters
+        assert "wlan0" not in lb.healthy_interfaces
+
+    def test_success_resets_errors():
+        lb = _make_load_balancer()
+        run(lb.report_error("wlan0", "e1"))
+        run(lb.report_error("wlan0", "e2"))
+        run(lb.report_success("wlan0"))
+        run(lb.report_error("wlan0", "e3"))
+        run(lb.report_error("wlan0", "e4"))
+        assert "wlan0" in lb.healthy_interfaces
+
+    def test_restore_adapter():
+        lb = _make_load_balancer()
+        for i in range(ERROR_THRESHOLD):
+            run(lb.report_error("wlan0", f"error {i}"))
+        assert "wlan0" in lb.removed_adapters
+        result = run(lb.restore_adapter("wlan0"))
+        assert result is True
+        assert "wlan0" in lb.healthy_interfaces
+
+    # Release
+    def test_release_makes_available():
+        lb = _make_load_balancer()
+        pool = run(lb.acquire_pool(TaskType.SCAN, count=2))
+        run(lb.release_pool(pool))
+        for iface in pool:
+            assert iface.current_task == TaskType.IDLE
+
+    # MockLoadBalancer
+    def test_mock_lb_setup():
+        mlb = _make_mock_lb()
+        assert len(mlb.healthy_interfaces) == 4
+
+    # Workload
+    def test_packets_tracking():
+        lb = _make_load_balancer()
+        run(lb.report_packets("wlan0", 100))
+        run(lb.report_packets("wlan0", 50))
+        wl = lb.get_workload("wlan0")
+        assert wl.packets_processed == 150
+
+    tests = [
+        ("test_acquire_pool_returns_multiple", test_acquire_pool_returns_multiple),
+        ("test_acquire_pool_all_available", test_acquire_pool_all_available),
+        ("test_acquire_pool_respects_count", test_acquire_pool_respects_count),
+        ("test_acquire_pool_empty_when_none", test_acquire_pool_empty_when_none),
+        ("test_round_robin_rotates", test_round_robin_rotates),
+        ("test_least_loaded_prefers_idle", test_least_loaded_prefers_idle),
+        ("test_band_split_5ghz_first", test_band_split_5ghz_first),
+        ("test_adapter_removed_after_errors", test_adapter_removed_after_errors),
+        ("test_success_resets_errors", test_success_resets_errors),
+        ("test_restore_adapter", test_restore_adapter),
+        ("test_release_makes_available", test_release_makes_available),
+        ("test_mock_lb_setup", test_mock_lb_setup),
+        ("test_packets_tracking", test_packets_tracking),
+    ]
+
+    for name, func in tests:
+        _run_test(name, func)
+
+    print(f"\nResults: {passed} passed, {failed} failed")
+    sys.exit(0 if failed == 0 else 1)
