@@ -153,6 +153,9 @@ class SSLStripper:
 
         log.info(f"Starting SSL Strip on {self.interface}")
 
+        # Set running BEFORE starting any threads to avoid race conditions
+        self.running = True
+
         # Enable IP forwarding
         self._enable_ip_forwarding()
 
@@ -170,7 +173,6 @@ class SSLStripper:
         )
         self._thread.start()
 
-        self.running = True
         log.info(f"SSL Strip active: {self.target_ip}")
 
         return True
@@ -361,7 +363,6 @@ class SSLStripper:
                 except Exception:
                     pass
 
-        self.running = True
         self._proxy_thread = threading.Thread(
             target=proxy_server_loop, daemon=True
         )

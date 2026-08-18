@@ -669,12 +669,20 @@ def teardown_monitor_mode(manager) -> bool:
     """Tear down monitor mode and restore normal operation.
 
     Args:
-        manager: Any object with a disable_monitor_mode() or disable() method.
+        manager: Any object with a disable_monitor_mode() or disable() method,
+                 OR a string interface name (in which case a LinuxMonitorManager
+                 is created to perform the teardown).
 
     Returns:
         True if teardown was successful, False otherwise.
     """
     if manager is None:
+        return False
+    # Handle case where a string interface name is passed instead of a manager object
+    if isinstance(manager, str):
+        if IS_LINUX:
+            mgr = LinuxMonitorManager(manager)
+            return mgr.disable_monitor_mode()
         return False
     if hasattr(manager, 'disable_monitor_mode'):
         return manager.disable_monitor_mode()

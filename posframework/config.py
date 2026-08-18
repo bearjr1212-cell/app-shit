@@ -41,7 +41,7 @@ DHCP_LEASE = os.environ.get("POSFW_DHCP_LEASE", "10.0.0.2,10.0.0.100,12h")
 DNS_CONF_PATH = os.path.join(tempfile.gettempdir(), "dnsmasq.conf")
 
 # ─── Channels ────────────────────────────────────────────────────────────────
-CHANNELS_24GHZ = list(range(1, 15))
+CHANNELS_24GHZ = list(range(1, 14))
 CHANNELS_5GHZ = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112,
                  116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165]
 

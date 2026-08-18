@@ -119,6 +119,11 @@ class HandshakeCapture:
         """
         Export captured handshake in hashcat .hccapx format (mode 2500).
 
+        NOTE: This implementation produces a simplified hccapx structure.
+        The official hccapx spec (hashcat v4+) uses a 393-byte record with
+        signature "HCCAPX\\x00\\x04". If hashcat rejects the output, use
+        export_22000() instead (mode 22000 is the modern replacement).
+
         Binary format fields:
             - Signature: HCCAPX\\x04 (7 bytes)
             - ESSID length (4 bytes LE)
@@ -766,7 +771,7 @@ def build_eapol_frame(msg_num, key_info_bits, client_mac, bssid, nonce, replay_c
 
     # EAPOL-Key header
     key_type = 2  # WPA2 (RSN)
-    key_info = struct.pack("<H", key_info_bits)
+    key_info = struct.pack(">H", key_info_bits)
     key_length = struct.pack(">H", 16)  # AES-CCMP
     replay_bytes = struct.pack(">Q", replay_counter)
     nonce = nonce[:32] if len(nonce) >= 32 else nonce + b"\x00" * (32 - len(nonce))

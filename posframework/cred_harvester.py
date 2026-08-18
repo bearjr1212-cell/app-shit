@@ -185,16 +185,44 @@ class CredentialHarvester:
             )
 
     def start(self):
-        """Start credential harvesting."""
+        """Start credential harvesting.
+
+        WARNING: This method is BLOCKING — it calls scapy's sniff() which
+        does not return until self._running is set to False (via stop()).
+        Callers must run this in a background thread::
+
+            import threading
+            threading.Thread(target=harvester.start, daemon=True).start()
+        """
         self._running = True
         log.info(f"Starting credential harvester on {self.interface}")
 
-        sniff(
-            iface=self.interface,
-            prn=self._packet_handler,
-            store=False,
-            stop_filter=lambda x: not self._running
-        )
+        try:
+            sniff(
+                iface=self.interface,
+                prn=self._packet_handler,
+                store=False,
+                stop_filter=lambda x: not self._running
+            )
+        except Exception as e:
+            if self._running:
+                log.error(f"Credential harvester sniff error: {e}")
+        finally:
+            self._running = False
+
+    def start_async(self):
+        """Start credential harvesting in a background daemon thread.
+
+        Convenience wrapper around start() for callers that don't want
+        to manage the thread themselves.
+
+        Returns:
+            The started threading.Thread instance.
+        """
+        import threading
+        t = threading.Thread(target=self.start, daemon=True, name="cred-harvester")
+        t.start()
+        return t
 
     def stop(self):
         """Stop credential harvesting."""
