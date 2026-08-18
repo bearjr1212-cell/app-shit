@@ -23,6 +23,25 @@ from typing import Any, Callable, Dict, Deque, List, Optional, Tuple
 
 from .config import IS_LINUX, IS_WINDOWS, log
 
+# Optional crypto imports for native decryption fallback
+try:
+    from .ccmp import ccmp_decapsulate
+    _HAS_CCMP = True
+except ImportError:
+    _HAS_CCMP = False
+
+try:
+    from .tkip import TKIPEngine, TKIPKey, TKIPRole
+    _HAS_TKIP = True
+except ImportError:
+    _HAS_TKIP = False
+
+try:
+    from .wpa2 import derive_pmk, derive_ptk, extract_key_hierarchy, CipherSuite
+    _HAS_WPA2 = True
+except ImportError:
+    _HAS_WPA2 = False
+
 
 # ─── Decryption Capabilities ─────────────────────────────────────────────────
 
@@ -380,6 +399,14 @@ class LiveDecryptionSession:
         self._frame_count = 0
         self._start_time = 0.0
 
+        # Native fallback state
+        self._native_fallback_enabled = False
+        self._native_engine: Optional[NativeDecryptionEngine] = None
+        self._native_psk: Optional[str] = None
+        self._native_ssid: Optional[str] = None
+        self._native_ap_mac: Optional[bytes] = None
+        self._native_sta_mac: Optional[bytes] = None
+
     @property
     def running(self) -> bool:
         """Whether the decryption session is currently active."""
@@ -462,6 +489,29 @@ class LiveDecryptionSession:
 
         log.info("Live decryption session started")
         return True
+
+    def set_native_fallback(self, psk: str, ssid: str,
+                            ap_mac: bytes, sta_mac: bytes) -> None:
+        """
+        Enable native decryption fallback when tshark is not available.
+
+        Configures the session to use Python-based crypto decryption
+        (via NativeDecryptionEngine) instead of tshark when start()
+        detects tshark is unavailable.
+
+        Args:
+            psk: WiFi passphrase
+            ssid: Target network SSID
+            ap_mac: 6-byte AP MAC address
+            sta_mac: 6-byte station MAC address
+        """
+        self._native_psk = psk
+        self._native_ssid = ssid
+        self._native_ap_mac = ap_mac
+        self._native_sta_mac = sta_mac
+        self._native_fallback_enabled = True
+        self._native_engine = NativeDecryptionEngine()
+        log.info(f"Native decryption fallback configured for SSID '{ssid}'")
 
     def stop(self) -> None:
         """Stop the live decryption session and clean up."""
@@ -697,6 +747,136 @@ class LiveDecryptionSession:
 
     def __exit__(self, *args: Any) -> None:
         self.stop()
+
+
+# ─── NativeDecryptionEngine ───────────────────────────────────────────────────
+
+
+class NativeDecryptionEngine:
+    """
+    Native Python-based decryption engine as a fallback when tshark is unavailable.
+
+    Uses the posframework crypto modules (ccmp, tkip, wpa2) to decrypt
+    802.11 frames in pure Python without external tools.
+
+    Usage:
+        engine = NativeDecryptionEngine()
+        plaintext = engine.decrypt_frame(
+            frame_bytes, mac_header, psk="password", ssid="MyAP",
+            ap_mac=b'\\x00\\x01\\x02\\x03\\x04\\x05',
+            sta_mac=b'\\x00\\x06\\x07\\x08\\x09\\x0a',
+            cipher='ccmp'
+        )
+    """
+
+    def __init__(self):
+        """Initialize native decryption engine."""
+        self._ptk_cache: Dict[Tuple[bytes, bytes], bytes] = {}
+
+    @staticmethod
+    def is_available() -> bool:
+        """Check if native decryption is available (crypto modules loaded)."""
+        return _HAS_CCMP and _HAS_WPA2
+
+    def derive_keys(self, psk: str, ssid: str, ap_mac: bytes, sta_mac: bytes,
+                    anonce: bytes, snonce: bytes,
+                    cipher: str = 'ccmp') -> Optional[bytes]:
+        """
+        Derive PTK from PSK and handshake parameters.
+
+        Args:
+            psk: WiFi passphrase
+            ssid: Network SSID
+            ap_mac: 6-byte AP MAC address
+            sta_mac: 6-byte station MAC address
+            anonce: 32-byte AP nonce
+            snonce: 32-byte station nonce
+            cipher: 'ccmp' or 'tkip'
+
+        Returns:
+            PTK bytes or None if WPA2 module not available.
+        """
+        if not _HAS_WPA2:
+            log.warning("NativeDecryption: WPA2 module not available")
+            return None
+
+        pmk = derive_pmk(psk, ssid)
+        cipher_suite = CipherSuite.TKIP if cipher == 'tkip' else CipherSuite.CCMP
+        ptk = derive_ptk(pmk, ap_mac, sta_mac, anonce, snonce, cipher_suite)
+        return ptk
+
+    def decrypt_frame(self, frame_bytes: bytes, mac_header: bytes,
+                      psk: str, ssid: str, ap_mac: bytes, sta_mac: bytes,
+                      anonce: bytes, snonce: bytes,
+                      cipher: str = 'ccmp') -> Optional[bytes]:
+        """
+        Decrypt a single 802.11 frame using PSK-derived keys.
+
+        Derives PMK/PTK from the PSK and handshake nonces, extracts the TK,
+        and uses ccmp_decapsulate or TKIPEngine.decapsulate to decrypt.
+
+        Args:
+            frame_bytes: Encrypted frame body (CCMP header + ciphertext + MIC,
+                        or IV + encrypted data for TKIP)
+            mac_header: 802.11 MAC header bytes
+            psk: WiFi passphrase
+            ssid: Network SSID
+            ap_mac: 6-byte AP MAC address
+            sta_mac: 6-byte station MAC address
+            anonce: 32-byte AP nonce
+            snonce: 32-byte station nonce
+            cipher: 'ccmp' or 'tkip'
+
+        Returns:
+            Decrypted plaintext or None on failure.
+        """
+        # Check for cached PTK
+        cache_key = (ap_mac, sta_mac)
+        ptk = self._ptk_cache.get(cache_key)
+
+        if ptk is None:
+            ptk = self.derive_keys(psk, ssid, ap_mac, sta_mac,
+                                   anonce, snonce, cipher)
+            if ptk is None:
+                return None
+            self._ptk_cache[cache_key] = ptk
+
+        if cipher == 'ccmp':
+            if not _HAS_CCMP:
+                log.warning("NativeDecryption: CCMP module not available")
+                return None
+            try:
+                keys = extract_key_hierarchy(ptk, CipherSuite.CCMP)
+                plaintext = ccmp_decapsulate(keys.tk, mac_header, frame_bytes)
+                return plaintext
+            except Exception as e:
+                log.debug(f"NativeDecryption: CCMP decrypt failed: {e}")
+                return None
+
+        elif cipher == 'tkip':
+            if not _HAS_TKIP:
+                log.warning("NativeDecryption: TKIP module not available")
+                return None
+            try:
+                tkip_key = TKIPKey.from_ptk(ptk, TKIPRole.SUPPLICANT)
+                da = mac_header[4:10]
+                sa = mac_header[10:16]
+                engine = TKIPEngine(tkip_key, ta=sa, ra=da,
+                                    role=TKIPRole.SUPPLICANT)
+                engine.rx_tsc = -1  # Disable replay check
+                plaintext = engine.decapsulate(frame_bytes, da=da, sa=sa)
+                return plaintext
+            except Exception as e:
+                log.debug(f"NativeDecryption: TKIP decrypt failed: {e}")
+                return None
+
+        else:
+            log.warning(f"NativeDecryption: Unknown cipher: {cipher}")
+            return None
+
+    def clear_cache(self) -> None:
+        """Clear the PTK cache."""
+        self._ptk_cache.clear()
 
 
 # ─── WiresharkCapture (merged from wireshark_capture.py) ─────────────────────

@@ -21,6 +21,13 @@ from scapy.layers.eap import EAPOL
 
 from .config import log
 
+# WPA2 crypto import (guarded for optional dependency)
+try:
+    from .wpa2 import derive_pmk as wpa2_derive_pmk
+    _HAS_WPA2 = True
+except ImportError:
+    _HAS_WPA2 = False
+
 
 class PMKIDCapture:
     """
@@ -271,6 +278,128 @@ class PMKIDCapture:
 
         except (IndexError, TypeError):
             pass
+
+        return None
+
+    @staticmethod
+    def compute_pmkid(pmk, ap_mac, sta_mac):
+        """
+        Compute PMKID per IEEE 802.11-2020.
+
+        PMKID = HMAC-SHA1-128(PMK, "PMK Name" || MAC_AP || MAC_STA)
+
+        Args:
+            pmk: 32-byte Pairwise Master Key
+            ap_mac: 6-byte AP MAC address (bytes)
+            sta_mac: 6-byte Station MAC address (bytes)
+
+        Returns:
+            16-byte PMKID value.
+        """
+        import hmac as _hmac
+        import hashlib as _hashlib
+
+        # Ensure MAC addresses are bytes
+        if isinstance(ap_mac, str):
+            ap_mac = bytes.fromhex(ap_mac.replace(":", "").replace("-", ""))
+        if isinstance(sta_mac, str):
+            sta_mac = bytes.fromhex(sta_mac.replace(":", "").replace("-", ""))
+
+        data = b"PMK Name" + ap_mac + sta_mac
+        return _hmac.new(pmk, data, _hashlib.sha1).digest()[:16]
+
+    def verify_pmkid(self, bssid, client_mac, password, ssid):
+        """
+        Verify a captured PMKID against a password.
+
+        Computes PMK = derive_pmk(password, ssid), then computes expected
+        PMKID = HMAC-SHA1-128(PMK, "PMK Name" || MAC_AP || MAC_STA)
+        and compares with the captured PMKID.
+
+        Args:
+            bssid: AP BSSID string (e.g., 'AA:BB:CC:DD:EE:FF')
+            client_mac: Client MAC address string
+            password: WiFi password to test
+            ssid: Network SSID
+
+        Returns:
+            True if password produces matching PMKID, False otherwise.
+        """
+        if not _HAS_WPA2:
+            log.warning("WPA2 module not available, cannot verify PMKID")
+            return False
+
+        bssid_lower = bssid.lower()
+        client_mac_lower = client_mac.lower()
+
+        # Get captured PMKID for this pair
+        with self._lock:
+            key = (client_mac_lower, bssid_lower)
+            if key not in self._pmkids:
+                log.debug(f"No captured PMKID for {client_mac} -> {bssid}")
+                return False
+            captured_pmkid_hex = self._pmkids[key]["pmkid"]
+
+        # Derive PMK from password and SSID
+        pmk = wpa2_derive_pmk(password, ssid)
+
+        # Convert MACs to bytes
+        ap_mac_bytes = bytes.fromhex(bssid_lower.replace(":", ""))
+        sta_mac_bytes = bytes.fromhex(client_mac_lower.replace(":", ""))
+
+        # Compute expected PMKID
+        expected_pmkid = self.compute_pmkid(pmk, ap_mac_bytes, sta_mac_bytes)
+        expected_hex = expected_pmkid.hex()
+
+        if expected_hex == captured_pmkid_hex:
+            log.critical(
+                f"PMKID password MATCH: {ssid} password='{password}'"
+            )
+            return True
+
+        return False
+
+    def try_passwords(self, bssid, passwords, ssid):
+        """
+        Try a list of passwords against captured PMKIDs for a given BSSID.
+
+        Iterates the password list and checks each against all captured
+        PMKIDs associated with the target BSSID.
+
+        Args:
+            bssid: Target AP BSSID string
+            passwords: Iterable of password strings to test
+            ssid: Network SSID
+
+        Returns:
+            The matching password string, or None if no match.
+        """
+        if not _HAS_WPA2:
+            log.warning("WPA2 module not available, cannot try passwords")
+            return None
+
+        bssid_lower = bssid.lower()
+
+        # Find all client MACs with captured PMKIDs for this BSSID
+        client_macs = []
+        with self._lock:
+            for (cm, bss), data in self._pmkids.items():
+                if bss == bssid_lower:
+                    client_macs.append(cm)
+
+        if not client_macs:
+            log.debug(f"No PMKIDs captured for BSSID {bssid}")
+            return None
+
+        log.info(
+            f"Testing {len(list(passwords))} passwords against "
+            f"{len(client_macs)} PMKIDs for {bssid}"
+        )
+
+        for password in passwords:
+            for client_mac in client_macs:
+                if self.verify_pmkid(bssid, client_mac, password, ssid):
+                    return password
 
         return None
 

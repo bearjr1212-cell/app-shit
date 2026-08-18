@@ -40,6 +40,13 @@ from .monitor_mode import (
     WindowsMonitorManager, check_npcap_monitor_support
 )
 
+# WPA2 EAPOL frame parsing and handshake state machine integration
+try:
+    from .wpa2 import EAPOLKeyFrame, HandshakeState, CipherSuite
+    _HAS_WPA2 = True
+except ImportError:
+    _HAS_WPA2 = False
+
 # Native C channel hopping — falls back to subprocess if unavailable
 try:
     from .native.channel_hop import set_channel as native_set_channel
@@ -309,6 +316,87 @@ class ReconEngine:
             return 4
         return 0
 
+    def _analyze_handshake_security(self, eapol_frames: list) -> dict:
+        """
+        Analyze captured EAPOL frames to determine cipher suite and key descriptor version.
+
+        Examines the key_info field from parsed EAPOLKeyFrame objects to determine:
+        - Key descriptor version (1=HMAC-MD5/RC4, 2=HMAC-SHA1/AES, 3=AES-CMAC)
+        - Cipher suite (CCMP or TKIP) based on key length and descriptor version
+        - Nonce values for correlation
+
+        Args:
+            eapol_frames: List of raw EAPOL frame bytes captured during handshake.
+
+        Returns:
+            Dict with keys: cipher_type (str), key_descriptor_version (int),
+            descriptor_name (str), nonces (list of hex nonce strings).
+        """
+        result = {
+            'cipher_type': 'unknown',
+            'key_descriptor_version': 0,
+            'descriptor_name': 'unknown',
+            'nonces': [],
+        }
+
+        if not eapol_frames:
+            return result
+
+        for frame_data in eapol_frames:
+            parsed = None
+            if _HAS_WPA2:
+                parsed = EAPOLKeyFrame.parse(frame_data)
+
+            if parsed is not None:
+                # Extract key descriptor version from the parsed frame
+                kdv = parsed.key_descriptor_version
+                if kdv > 0 and result['key_descriptor_version'] == 0:
+                    result['key_descriptor_version'] = kdv
+                    if kdv == 1:
+                        result['descriptor_name'] = 'HMAC-MD5/RC4'
+                        result['cipher_type'] = 'TKIP'
+                    elif kdv == 2:
+                        result['descriptor_name'] = 'HMAC-SHA1/AES'
+                        result['cipher_type'] = 'CCMP'
+                    elif kdv == 3:
+                        result['descriptor_name'] = 'AES-CMAC'
+                        result['cipher_type'] = 'CCMP-256'
+
+                # Also use key_length to confirm cipher type
+                if parsed.key_length == 16 and kdv == 2:
+                    result['cipher_type'] = 'CCMP'
+                elif parsed.key_length == 32 and kdv == 1:
+                    result['cipher_type'] = 'TKIP'
+
+                # Collect non-zero nonces
+                if parsed.nonce and parsed.nonce != b'\x00' * 32:
+                    result['nonces'].append(parsed.nonce.hex())
+            else:
+                # Fallback: manual parsing if wpa2 module not available
+                if len(frame_data) >= 9:
+                    key_info = struct.unpack(">H", frame_data[5:7])[0]
+                    kdv = key_info & 0x07
+                    if kdv > 0 and result['key_descriptor_version'] == 0:
+                        result['key_descriptor_version'] = kdv
+                        if kdv == 1:
+                            result['descriptor_name'] = 'HMAC-MD5/RC4'
+                            result['cipher_type'] = 'TKIP'
+                        elif kdv == 2:
+                            result['descriptor_name'] = 'HMAC-SHA1/AES'
+                            result['cipher_type'] = 'CCMP'
+                        elif kdv == 3:
+                            result['descriptor_name'] = 'AES-CMAC'
+                            result['cipher_type'] = 'CCMP-256'
+
+        if result['cipher_type'] != 'unknown':
+            log.info(
+                f"[HANDSHAKE-SECURITY] Cipher: {result['cipher_type']} | "
+                f"Key Descriptor: v{result['key_descriptor_version']} "
+                f"({result['descriptor_name']})"
+            )
+
+        return result
+
     def packet_handler(self, pkt):
         if not pkt.haslayer(Dot11):
             return
@@ -446,6 +534,18 @@ class ReconEngine:
             log.info(f"POS AP: {vendor} | {bssid} | '{ssid}' | Ch:{channel} | {security} | {rssi}dBm")
         elif is_pos_ssid(ssid):
             log.info(f"POS SSID: '{ssid}' | {bssid} | {vendor} | {rssi}dBm")
+        # Log WPA3-SAE detection for downstream attack tool integration
+        if "WPA3" in security and "SAE" not in security:
+            # classify_security returns "WPA3-Personal" for SAE-based AKMs
+            log.info(
+                f"[WPA3-SAE] Detected on '{ssid}' ({bssid}) - "
+                f"wpa3 subpackage available for downgrade testing"
+            )
+        elif "WPA3" in security:
+            log.info(
+                f"[WPA3-SAE] Detected on '{ssid}' ({bssid}) - "
+                f"wpa3 subpackage available for downgrade testing"
+            )
 
     def _handle_probe_req(self, pkt, rssi):
         client_mac = pkt.addr2
@@ -509,15 +609,54 @@ class ReconEngine:
         if msg_num == 0:
             return
         key = (client_mac, bssid)
+
+        # Parse EAPOL frame through wpa2.EAPOLKeyFrame for richer detail
+        parsed_frame = None
+        if _HAS_WPA2:
+            parsed_frame = EAPOLKeyFrame.parse(eapol_raw)
+            if parsed_frame:
+                nonce_hex = parsed_frame.nonce.hex()[:16] + "..."
+                log.debug(
+                    f"EAPOL M{msg_num} parsed: key_info=0x{parsed_frame.key_info:04x} "
+                    f"key_len={parsed_frame.key_length} nonce={nonce_hex}"
+                )
+
         # Only track pairwise handshake messages (1-4) in the 4-way tracker
         # Group key messages (5, 6) are logged but not added to the tracker
         if msg_num <= 4:
             self._eapol_tracker[key].add(msg_num)
+            # Store raw EAPOL frame data for security analysis
+            if not hasattr(self, '_eapol_raw_frames'):
+                self._eapol_raw_frames = defaultdict(list)
+            self._eapol_raw_frames[key].append(eapol_raw)
+
         self.db.log_eapol(client_mac, bssid, msg_num)
         vendor = self._get_vendor(client_mac)
         captured = sorted(self._eapol_tracker[key])
         if len(self._eapol_tracker[key]) >= 4:
             log.info(f"FULL HANDSHAKE: {client_mac} ({vendor}) <-> {bssid} | M{captured}")
+            # Analyze handshake security when full 4-way captured
+            if hasattr(self, '_eapol_raw_frames') and key in self._eapol_raw_frames:
+                security_info = self._analyze_handshake_security(
+                    self._eapol_raw_frames[key]
+                )
+                cipher_type = security_info.get('cipher_type', 'unknown')
+                if cipher_type != 'unknown':
+                    log.info(
+                        f"[HANDSHAKE] {client_mac} <-> {bssid}: "
+                        f"Cipher={cipher_type} "
+                        f"(KDV={security_info['key_descriptor_version']})"
+                    )
+                    # Store cipher type in database client record if available
+                    try:
+                        self.db.update_client(
+                            client_mac, vendor, rssi,
+                            is_pos_vendor(vendor),
+                            associated_bssid=bssid
+                        )
+                    except Exception:
+                        pass
+                del self._eapol_raw_frames[key]
             del self._eapol_tracker[key]
         elif len(self._eapol_tracker[key]) >= 2:
             log.info(f"EAPOL M{msg_num}: {client_mac} ({vendor}) <-> {bssid} | {captured}")

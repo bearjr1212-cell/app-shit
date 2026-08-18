@@ -53,6 +53,20 @@ from .target_scorer import (
 
 logger = logging.getLogger(__name__)
 
+# WPA2 integration for native credential verification
+try:
+    from .wpa2 import (
+        derive_pmk as _wpa2_derive_pmk,
+        derive_ptk as _wpa2_derive_ptk,
+        extract_key_hierarchy as _wpa2_extract_key_hierarchy,
+        verify_eapol_mic as _wpa2_verify_eapol_mic,
+        EAPOLKeyFrame as _WPA2EAPOLKeyFrame,
+        CipherSuite as _WPA2CipherSuite,
+    )
+    _HAS_WPA2 = True
+except ImportError:
+    _HAS_WPA2 = False
+
 
 class AutoPwnMode(Enum):
     """AutoPwn operation modes."""
@@ -603,6 +617,21 @@ class AutoPwnEngine:
 
                 if result and result.get("password"):
                     password = result["password"]
+
+                    # Verify the cracked password using native WPA2 verification
+                    # before reporting it as valid
+                    handshake_frames = result.get("handshake_frames", [])
+                    if handshake_frames and _HAS_WPA2:
+                        verified = self._verify_credential_native(
+                            target, password, handshake_frames
+                        )
+                        if not verified:
+                            logger.warning(
+                                "Cracked password for %s failed native "
+                                "verification, reporting anyway",
+                                target.ssid,
+                            )
+
                     await self._target_analyzer.mark_cracked(
                         target.id, password
                     )
@@ -779,6 +808,106 @@ class AutoPwnEngine:
     # ═══════════════════════════════════════════════════════════════════════════
     # Helpers
     # ═══════════════════════════════════════════════════════════════════════════
+
+    def _verify_credential_native(
+        self,
+        target: Target,
+        password: str,
+        handshake_frames: List[bytes],
+    ) -> bool:
+        """
+        Verify a cracked credential using native Python WPA2 key derivation.
+
+        Performs PMK/PTK derivation and MIC verification purely in Python,
+        without requiring wpa_supplicant or other external tools.
+
+        Args:
+            target: Target with bssid and ssid attributes
+            password: Candidate password to verify
+            handshake_frames: List of raw EAPOL frame bytes (Msg1 + Msg2 minimum)
+
+        Returns:
+            True if the password produces a valid MIC on the captured Msg2.
+        """
+        if not _HAS_WPA2:
+            logger.warning(
+                "wpa2 module not available; skipping native credential verification"
+            )
+            return False
+
+        try:
+            # Parse frames to find Msg1 (ANonce) and Msg2 (SNonce + MIC)
+            msg1_frame = None
+            msg2_frame = None
+
+            for frame_data in handshake_frames:
+                parsed = _WPA2EAPOLKeyFrame.parse(frame_data)
+                if parsed is None:
+                    continue
+                if parsed.nonce == b'\x00' * 32:
+                    continue
+                # Msg1: has ACK, no MIC (AP sends ANonce)
+                if parsed.has_ack and not parsed.has_mic:
+                    msg1_frame = parsed
+                # Msg2: has MIC, no ACK, pairwise (STA sends SNonce)
+                elif parsed.has_mic and not parsed.has_ack and parsed.is_pairwise:
+                    msg2_frame = parsed
+
+            if msg1_frame is None or msg2_frame is None:
+                logger.debug(
+                    "Incomplete handshake for native verification: "
+                    "msg1=%s, msg2=%s",
+                    msg1_frame is not None, msg2_frame is not None,
+                )
+                return False
+
+            anonce = msg1_frame.nonce
+            snonce = msg2_frame.nonce
+
+            # Derive PMK from password and SSID
+            ssid = getattr(target, "ssid", "")
+            pmk = _wpa2_derive_pmk(password, ssid)
+
+            # Convert BSSID and STA MAC to bytes
+            bssid = getattr(target, "bssid", "")
+            ap_mac_bytes = bytes.fromhex(bssid.replace(":", "").replace("-", ""))
+
+            # Try to get STA MAC from target attributes or use a default
+            sta_mac = getattr(target, "client_mac", None)
+            if sta_mac is None:
+                # Fallback: extract from Msg2 frame context if available
+                sta_mac = getattr(target, "sta_mac", None)
+            if sta_mac is None:
+                logger.debug("No STA MAC available for native verification")
+                return False
+            sta_mac_bytes = bytes.fromhex(
+                sta_mac.replace(":", "").replace("-", "")
+            )
+
+            # Derive PTK
+            ptk = _wpa2_derive_ptk(
+                pmk, ap_mac_bytes, sta_mac_bytes, anonce, snonce,
+                _WPA2CipherSuite.CCMP,
+            )
+
+            # Extract key hierarchy and verify MIC
+            keys = _wpa2_extract_key_hierarchy(ptk, _WPA2CipherSuite.CCMP)
+            verified = _wpa2_verify_eapol_mic(keys.kck, msg2_frame)
+
+            if verified:
+                logger.info(
+                    "Native credential verification PASSED for %s", target.ssid
+                )
+            else:
+                logger.debug(
+                    "Native credential verification failed for %s", target.ssid
+                )
+
+            return verified
+
+        except Exception as e:
+            logger.error("Native credential verification error: %s", e)
+            return False
 
     def _should_stop_session(self) -> bool:
         """Check if session should stop due to duration."""

