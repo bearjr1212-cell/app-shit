@@ -733,6 +733,8 @@ class TerminalUI:
         self.cracking_mode = "dictionary"  # dictionary, brute-force, rules
         self.wordlist_path = "/usr/share/wordlists/rockyou.txt"
         self.captured_handshakes: List[Dict] = []
+        self.crack_target_bssid = ""
+        self.crack_target_ssid = ""
 
         # Settings
         self.monitor_iface = DEFAULT_MONITOR_IFACE
@@ -1191,8 +1193,9 @@ class TerminalUI:
         if self.autopwn_running:
             parts.append(f"[AUTOPWN:{self.autopwn_state}]")
         if self.selected_target:
+            ssid = self.selected_target.get("ssid", "?")[:16]
             bssid = self.selected_target.get("bssid", "?")[:17]
-            parts.append(f"Target:{bssid}")
+            parts.append(f"Target: {ssid} ({bssid})")
 
         now = datetime.now().strftime("%H:%M:%S")
         parts.append(now)
@@ -1376,9 +1379,14 @@ class TerminalUI:
         start_y = 3
         title = " Credential Attack Modules (Enter: Toggle Start/Stop)"
         self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
 
-        y = start_y + 2
+        if self.selected_target:
+            target_info = f" Target: {self.selected_target.get('ssid', '?')} ({self.selected_target.get('bssid', '?')})"
+            self._safe_addstr(stdscr, start_y + 1, 1, target_info, curses.color_pair(COLOR_WARNING))
+
+        self._safe_hline(stdscr, start_y + 2, 1, curses.ACS_HLINE, w - 2)
+
+        y = start_y + 3
         items = list(self.cred_attacks.items())
         max_rows = h - y - 3
         visible_items = items[self.scroll_offset:self.scroll_offset + max_rows]
@@ -1424,8 +1432,11 @@ class TerminalUI:
 
         # Config display
         cfg_y = start_y + 1
+        target_info = ""
+        if self.selected_target:
+            target_info = f" [From: {self.selected_target.get('ssid', '?')} ({self.selected_target.get('bssid', '?')})]"
         self._safe_addstr(stdscr, cfg_y, 1,
-                          f" Target IP: {self.mitm_target_ip or '<not set>'} | Gateway: {self.mitm_gateway_ip or '<not set>'} | DNS Domain: {self.dns_spoof_domain or '<any>'}",
+                          f" Target IP: {self.mitm_target_ip or '<not set>'} | Gateway: {self.mitm_gateway_ip or '<not set>'} | DNS Domain: {self.dns_spoof_domain or '<any>'}{target_info}",
                           curses.color_pair(COLOR_WARNING))
         self._safe_hline(stdscr, cfg_y + 1, 1, curses.ACS_HLINE, w - 2)
 
@@ -1681,6 +1692,12 @@ class TerminalUI:
         crack_color = curses.color_pair(COLOR_RUNNING) if self.cracking_active else curses.color_pair(COLOR_NORMAL)
         self._safe_addstr(stdscr, y, 1, f" Status: {crack_status}  Mode: {self.cracking_mode}  Wordlist: {self.wordlist_path}", crack_color)
 
+        # Show target info if set
+        if self.crack_target_bssid or self.crack_target_ssid:
+            y += 1
+            target_line = f" Target: {self.crack_target_ssid or '<hidden>'} ({self.crack_target_bssid})"
+            self._safe_addstr(stdscr, y, 1, target_line[:w-2], curses.color_pair(COLOR_WARNING))
+
         # Progress bar
         y += 1
         if self.cracking_active:
@@ -1844,30 +1861,42 @@ class TerminalUI:
         if key == ord('q') or key == ord('Q'):
             self.running = False
         elif key == ord('\t'):
+            prev_tab = self.active_tab
             self.active_tab = (self.active_tab + 1) % len(TABS)
             self.scroll_offset = 0
             self.menu_selected = 0
+            self._on_tab_switch(prev_tab, self.active_tab)
         elif key == curses.KEY_BTAB:
+            prev_tab = self.active_tab
             self.active_tab = (self.active_tab - 1) % len(TABS)
             self.scroll_offset = 0
             self.menu_selected = 0
+            self._on_tab_switch(prev_tab, self.active_tab)
         elif key >= ord('1') and key <= ord('9'):
             idx = key - ord('1')
             if idx < len(TABS):
+                prev_tab = self.active_tab
                 self.active_tab = idx
                 self.scroll_offset = 0
                 self.menu_selected = 0
+                self._on_tab_switch(prev_tab, self.active_tab)
         elif key == curses.KEY_UP:
             if self.menu_selected > 0:
                 self.menu_selected -= 1
             elif self.scroll_offset > 0:
                 self.scroll_offset -= 1
+            # Sync target selection index when navigating Targets tab
+            if TABS[self.active_tab] == "Targets":
+                self._sync_target_selection()
         elif key == curses.KEY_DOWN:
             max_items = self._get_max_menu_items()
             if self.menu_selected < max_items - 1:
                 self.menu_selected += 1
             else:
                 self.scroll_offset += 1
+            # Sync target selection index when navigating Targets tab
+            if TABS[self.active_tab] == "Targets":
+                self._sync_target_selection()
         elif key == curses.KEY_PPAGE:
             self.scroll_offset = max(0, self.scroll_offset - 10)
         elif key == curses.KEY_NPAGE:
@@ -1934,6 +1963,117 @@ class TerminalUI:
         self.input_field = label
         self.input_buffer = ""
         self.input_callback = callback
+
+    # ================================================================
+    # TARGET SELECTION & AUTO-FILL
+    # ================================================================
+
+    def _sync_target_selection(self):
+        """Sync selected_target_idx/selected_client_idx with current menu position.
+
+        Called when UP/DOWN keys are pressed while on the Targets tab so that
+        the highlighted row in the AP/client table stays in sync with the
+        logical selection index used by _handle_targets_action and the
+        auto-fill logic.
+        """
+        idx = self.scroll_offset + self.menu_selected
+        if self.target_view == "ap":
+            self.selected_target_idx = idx
+            aps = self._get_access_points()
+            if aps and 0 <= idx < len(aps):
+                self.selected_target = aps[idx]
+        else:
+            self.selected_client_idx = idx
+            clients = self._get_clients()
+            if clients and 0 <= idx < len(clients):
+                self.selected_client = clients[idx]
+
+    def _on_tab_switch(self, prev_tab_idx: int, new_tab_idx: int):
+        """Handle logic when the user switches tabs.
+
+        If leaving the Targets tab with a selected target, auto-fill all
+        attack module parameters so the user does not have to manually
+        enter BSSID/SSID/channel/IP information on each attack tab.
+        """
+        prev_tab = TABS[prev_tab_idx]
+        if prev_tab == "Targets" and self.selected_target:
+            self._autofill_from_target()
+
+    def _autofill_from_target(self):
+        """Populate attack parameters across all tabs from the currently selected target.
+
+        Reads self.selected_target (an AP dict) and fills in:
+          - WiFi Attacks: target BSSID, SSID, channel are already used via
+            _build_engine_kwargs which reads self.selected_target directly.
+          - MITM: derives gateway IP from target BSSID (assumes .1 on common
+            subnet) and sets mitm_target_ip/mitm_gateway_ip if not already set.
+          - Credential Attacks: target info available via self.selected_target.
+          - Cracking: target BSSID/SSID stored for hashcat/john reference.
+
+        This method only fills values that are currently empty so it does not
+        overwrite user-provided configuration.
+        """
+        if not self.selected_target:
+            return
+
+        target_bssid = self.selected_target.get("bssid", "")
+        target_ssid = self.selected_target.get("ssid", "")
+        target_channel = self.selected_target.get("channel", "")
+
+        # --- MITM auto-fill ---
+        # Derive a plausible gateway IP from the target network.
+        # If the target has associated client IPs or gateway info in the DB,
+        # use that. Otherwise, use a common default gateway pattern.
+        if not self.mitm_gateway_ip and target_bssid:
+            gateway = self._derive_gateway_ip(target_bssid)
+            if gateway:
+                self.mitm_gateway_ip = gateway
+
+        # If we derived a gateway, suggest a target IP range hint
+        if not self.mitm_target_ip and self.mitm_gateway_ip:
+            # Use the gateway network with .0/24 hint as target
+            parts = self.mitm_gateway_ip.rsplit(".", 1)
+            if len(parts) == 2:
+                self.mitm_target_ip = parts[0] + ".0/24"
+
+        # --- Cracking auto-fill ---
+        # Store the target BSSID/SSID so hashcat/john commands reference
+        # the correct capture file.
+        if not hasattr(self, "crack_target_bssid") or not self.crack_target_bssid:
+            self.crack_target_bssid = target_bssid
+        if not hasattr(self, "crack_target_ssid") or not self.crack_target_ssid:
+            self.crack_target_ssid = target_ssid
+
+        # Update status message to confirm auto-fill
+        self.status_message = f"Target set: {target_ssid or '<hidden>'} ({target_bssid}) Ch:{target_channel}"
+
+    def _derive_gateway_ip(self, bssid: str) -> str:
+        """Attempt to derive the gateway IP for a target AP.
+
+        Strategy:
+          1. Check database for DHCP leases that reference this BSSID's network.
+          2. If not found, assume a common 192.168.x.1 pattern.
+
+        Returns empty string if unable to determine.
+        """
+        # Try to get gateway from database DHCP info
+        if self.db:
+            try:
+                conn = self.db.conn if hasattr(self.db, "conn") else None
+                if conn:
+                    cursor = conn.execute(
+                        "SELECT gateway_ip FROM dhcp_leases WHERE bssid = ? LIMIT 1",
+                        (bssid,)
+                    )
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        return row[0]
+            except Exception:
+                pass
+
+        # Fallback: common gateway assumption
+        # Many consumer routers use 192.168.1.1 or 192.168.0.1
+        return "192.168.1.1"
 
     # ================================================================
     # ACTION HANDLERS
@@ -2011,6 +2151,8 @@ class TerminalUI:
 
     def _handle_targets_action(self):
         """Handle Enter on Targets tab - show context-sensitive attack popup."""
+        # Sync target index with current navigation position
+        self._sync_target_selection()
         if self.target_view == "ap":
             aps = self._get_access_points()
             if aps and self.selected_target_idx < len(aps):
