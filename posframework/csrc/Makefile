@@ -8,7 +8,7 @@ LDFLAGS :=
 
 INSTALL_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/../lib
 
-LIBS := libpacket_engine.so libchannel_hop.so libcrypto_parse.so libdeauth_craft.so libbeacon_flood.so libarp_spoof.so libsnmp_encode.so libpcap_write.so libtarget_pqueue.so libstate_machine.so libcrypto_accel.so
+LIBS := libpacket_engine.so libchannel_hop.so libcrypto_parse.so libdeauth_craft.so libbeacon_flood.so libarp_spoof.so libsnmp_encode.so libpcap_write.so libtarget_pqueue.so libstate_machine.so libcrypto_accel.so libtkip_mic.so libccmp_aes.so
 
 .PHONY: all clean install
 
@@ -45,6 +45,12 @@ libstate_machine.so: state_machine.c state_machine.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 libcrypto_accel.so: crypto_accel.c crypto_accel.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+libtkip_mic.so: tkip_mic.c tkip_mic.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+libccmp_aes.so: ccmp_aes.c ccmp_aes.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 install: all

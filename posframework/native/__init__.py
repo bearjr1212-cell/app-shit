@@ -31,6 +31,8 @@ _LIB_NAMES = [
     "libtarget_pqueue",
     "libstate_machine",
     "libcrypto_accel",
+    "libtkip_mic",
+    "libccmp_aes",
 ]
 
 
