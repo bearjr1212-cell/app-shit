@@ -1105,20 +1105,26 @@ class TerminalUI:
             self._restore_logging()
 
     def _setup_gui_logging(self):
-        """Redirect framework logging to an internal buffer for curses display.
+        """Redirect ALL logging to internal buffer for curses display.
 
-        Removes all existing handlers from the POSFramework logger and replaces
-        them with a handler that writes to self._log_buffer (a deque shown in
-        the activity feed). Saves original handlers for restoration on exit.
+        Completely silences stderr/stdout output to prevent curses corruption.
+        All log records are captured in the activity feed for in-UI display.
         """
+        import io
+
         self._original_handlers = log.handlers[:]
         self._original_level = log.level
+        self._original_propagate = log.propagate
 
-        # Remove stderr handlers to prevent curses corruption
+        # CRITICAL: Stop propagation to root logger — this prevents messages
+        # from reaching root's StreamHandler even if we miss removing it
+        log.propagate = False
+
+        # Remove ALL handlers from the POSFramework logger
         for handler in log.handlers[:]:
             log.removeHandler(handler)
 
-        # Add a custom handler that captures to our deque
+        # Add our custom handler that captures to the activity feed
         self._log_handler = _CursesLogHandler(self)
         self._log_handler.setLevel(logging.DEBUG)
         self._log_handler.setFormatter(
@@ -1126,29 +1132,46 @@ class TerminalUI:
         )
         log.addHandler(self._log_handler)
 
-        # Also redirect the root logger to avoid stray library output
+        # Suppress the ROOT logger entirely — catches scapy, manuf, etc.
         root = logging.getLogger()
         self._original_root_handlers = root.handlers[:]
+        self._original_root_level = root.level
         for handler in root.handlers[:]:
-            if hasattr(handler, 'stream') and hasattr(handler.stream, 'fileno'):
-                try:
-                    if handler.stream.fileno() in (1, 2):  # stdout/stderr
-                        root.removeHandler(handler)
-                except (ValueError, OSError):
-                    pass
+            root.removeHandler(handler)
+        # Add our handler to root too so ALL library logs go to activity feed
+        root.addHandler(self._log_handler)
+
+        # Nuclear option: redirect actual stderr/stdout file descriptors
+        # This catches ANY print() or sys.stderr.write() that bypasses logging
+        self._original_stderr = sys.stderr
+        self._original_stdout = sys.stdout
+        sys.stderr = io.StringIO()  # /dev/null for stderr
+        sys.stdout = io.StringIO()  # /dev/null for stdout
 
     def _restore_logging(self):
         """Restore original logging handlers after curses exits."""
+        # Restore stderr/stdout first
+        if hasattr(self, '_original_stderr'):
+            sys.stderr = self._original_stderr
+        if hasattr(self, '_original_stdout'):
+            sys.stdout = self._original_stdout
+
         # Restore POSFramework logger
         if hasattr(self, '_log_handler'):
             log.removeHandler(self._log_handler)
         if hasattr(self, '_original_handlers'):
             for handler in self._original_handlers:
-                log.addHandler(handler)
+                if handler not in log.handlers:
+                    log.addHandler(handler)
+        if hasattr(self, '_original_propagate'):
+            log.propagate = self._original_propagate
 
         # Restore root logger
         if hasattr(self, '_original_root_handlers'):
             root = logging.getLogger()
+            # Remove our handler from root
+            if hasattr(self, '_log_handler') and self._log_handler in root.handlers:
+                root.removeHandler(self._log_handler)
             for handler in self._original_root_handlers:
                 if handler not in root.handlers:
                     root.addHandler(handler)
