@@ -1881,22 +1881,41 @@ class TerminalUI:
                 self.menu_selected = 0
                 self._on_tab_switch(prev_tab, self.active_tab)
         elif key == curses.KEY_UP:
-            if self.menu_selected > 0:
-                self.menu_selected -= 1
-            elif self.scroll_offset > 0:
-                self.scroll_offset -= 1
-            # Sync target selection index when navigating Targets tab
             if TABS[self.active_tab] == "Targets":
+                # Direct target navigation
+                if self.selected_target_idx > 0:
+                    self.selected_target_idx -= 1
+                    # Scroll up if needed
+                    if self.selected_target_idx < self.scroll_offset:
+                        self.scroll_offset = self.selected_target_idx
                 self._sync_target_selection()
-        elif key == curses.KEY_DOWN:
-            max_items = self._get_max_menu_items()
-            if self.menu_selected < max_items - 1:
-                self.menu_selected += 1
             else:
-                self.scroll_offset += 1
-            # Sync target selection index when navigating Targets tab
+                if self.menu_selected > 0:
+                    self.menu_selected -= 1
+                elif self.scroll_offset > 0:
+                    self.scroll_offset -= 1
+        elif key == curses.KEY_DOWN:
             if TABS[self.active_tab] == "Targets":
+                # Direct target navigation
+                max_items = self._get_max_menu_items()
+                if self.selected_target_idx < max_items - 1:
+                    self.selected_target_idx += 1
+                    # Get visible rows (approximate: terminal height - header - footer)
+                    try:
+                        h, w = self.stdscr.getmaxyx()
+                        visible_rows = h - 10
+                    except Exception:
+                        visible_rows = 20
+                    # Scroll down if selection goes below visible area
+                    if self.selected_target_idx >= self.scroll_offset + visible_rows:
+                        self.scroll_offset = self.selected_target_idx - visible_rows + 1
                 self._sync_target_selection()
+            else:
+                max_items = self._get_max_menu_items()
+                if self.menu_selected < max_items - 1:
+                    self.menu_selected += 1
+                else:
+                    self.scroll_offset += 1
         elif key == curses.KEY_PPAGE:
             self.scroll_offset = max(0, self.scroll_offset - 10)
         elif key == curses.KEY_NPAGE:
@@ -1969,24 +1988,20 @@ class TerminalUI:
     # ================================================================
 
     def _sync_target_selection(self):
-        """Sync selected_target_idx/selected_client_idx with current menu position.
+        """Sync selected_target from selected_target_idx.
 
         Called when UP/DOWN keys are pressed while on the Targets tab so that
         the highlighted row in the AP/client table stays in sync with the
-        logical selection index used by _handle_targets_action and the
-        auto-fill logic.
+        logical selection index and auto-fill reads the correct target.
         """
-        idx = self.scroll_offset + self.menu_selected
         if self.target_view == "ap":
-            self.selected_target_idx = idx
             aps = self._get_access_points()
-            if aps and 0 <= idx < len(aps):
-                self.selected_target = aps[idx]
+            if aps and 0 <= self.selected_target_idx < len(aps):
+                self.selected_target = aps[self.selected_target_idx]
         else:
-            self.selected_client_idx = idx
             clients = self._get_clients()
-            if clients and 0 <= idx < len(clients):
-                self.selected_client = clients[idx]
+            if clients and 0 <= self.selected_client_idx < len(clients):
+                self.selected_client = clients[self.selected_client_idx]
 
     def _on_tab_switch(self, prev_tab_idx: int, new_tab_idx: int):
         """Handle logic when the user switches tabs.
