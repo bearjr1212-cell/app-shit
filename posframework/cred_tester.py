@@ -20,6 +20,21 @@ from urllib.parse import urlparse
 
 from .config import log
 
+# WPA2 crypto imports (guarded for optional dependency)
+try:
+    from .wpa2 import (
+        derive_pmk as wpa2_derive_pmk,
+        derive_ptk as wpa2_derive_ptk,
+        extract_key_hierarchy as wpa2_extract_key_hierarchy,
+        compute_eapol_mic as wpa2_compute_eapol_mic,
+        verify_eapol_mic as wpa2_verify_eapol_mic,
+        EAPOLKeyFrame as WPA2EAPOLKeyFrame,
+        CipherSuite as WPA2CipherSuite,
+    )
+    _HAS_WPA2 = True
+except ImportError:
+    _HAS_WPA2 = False
+
 
 class CredentialTester:
     """
@@ -40,6 +55,112 @@ class CredentialTester:
     def add_credentials(self, bssid, ssid, username, password):
         """Add credentials to test queue."""
         self._results[(bssid, ssid)].append((username, password))
+
+    def test_wifi_password_native(self, bssid, ssid, password, handshake_frames):
+        """
+        Test Wi-Fi password using pure-Python WPA2 PMK/PTK derivation and MIC verification.
+
+        This avoids spawning wpa_supplicant and works without wireless hardware.
+        It parses the EAPOL frames to extract ANonce/SNonce, derives PTK,
+        and verifies the MIC on Msg2.
+
+        Args:
+            bssid: AP BSSID (string like 'AA:BB:CC:DD:EE:FF')
+            ssid: Network SSID
+            password: WiFi password to test
+            handshake_frames: List of raw EAPOL frame bytes (must include
+                              Msg1 and Msg2, with associated MAC info)
+
+        Returns:
+            True if password is correct (MIC verification passes).
+        """
+        if not _HAS_WPA2:
+            log.debug("WPA2 module unavailable, cannot do native password test")
+            return None  # None means not applicable, fall through
+
+        if not handshake_frames or len(handshake_frames) < 2:
+            log.debug("Native test requires at least 2 handshake frames")
+            return None
+
+        try:
+            # Parse frames to identify Msg1 and Msg2
+            msg1_frame = None
+            msg2_frame = None
+
+            for item in handshake_frames:
+                # Support both plain bytes and (raw_bytes, sta_mac) tuples
+                if isinstance(item, tuple):
+                    raw_frame = item[0]
+                else:
+                    raw_frame = item
+                parsed = WPA2EAPOLKeyFrame.parse(raw_frame)
+                if parsed is None:
+                    continue
+                # Msg1: ACK set, no MIC
+                if parsed.has_ack and not parsed.has_mic:
+                    msg1_frame = parsed
+                # Msg2: MIC set, no ACK, pairwise
+                elif parsed.has_mic and not parsed.has_ack and parsed.is_pairwise:
+                    msg2_frame = parsed
+
+            if msg1_frame is None or msg2_frame is None:
+                log.debug("Could not find Msg1+Msg2 in provided frames")
+                return None
+
+            anonce = msg1_frame.nonce
+            snonce = msg2_frame.nonce
+
+            # Convert BSSID string to bytes
+            ap_mac = bytes.fromhex(bssid.replace(":", "").replace("-", ""))
+
+            # For STA MAC, we need it from context. Try to extract from frame metadata
+            # if handshake_frames is a list of tuples (raw_bytes, sta_mac)
+            sta_mac = None
+            if isinstance(handshake_frames, list) and len(handshake_frames) > 0:
+                first = handshake_frames[0]
+                if isinstance(first, tuple) and len(first) >= 2:
+                    # Format: (raw_bytes, sta_mac_str)
+                    sta_mac_str = first[1]
+                    sta_mac = bytes.fromhex(sta_mac_str.replace(":", "").replace("-", ""))
+
+            # If frames are plain bytes, try to get STA MAC from the object's context
+            if sta_mac is None:
+                # Attempt to derive STA MAC from the Msg2 frame key data
+                # In practice, the caller should provide this
+                log.debug("No STA MAC available for native test")
+                return None
+
+            # Derive PMK
+            pmk = wpa2_derive_pmk(password, ssid)
+
+            # Derive PTK
+            ptk = wpa2_derive_ptk(pmk, ap_mac, sta_mac, anonce, snonce,
+                                  WPA2CipherSuite.CCMP)
+
+            # Extract keys
+            keys = wpa2_extract_key_hierarchy(ptk, WPA2CipherSuite.CCMP)
+
+            # Verify MIC on Msg2
+            result = wpa2_verify_eapol_mic(keys.kck, msg2_frame)
+
+            if result:
+                log.critical(f"Native WPA2 test SUCCESS: password valid for {ssid}")
+                self._test_results.append({
+                    "type": "wifi_native", "ssid": ssid, "bssid": bssid,
+                    "success": True, "password": password
+                })
+            else:
+                log.debug(f"Native WPA2 test: password invalid for {ssid}")
+                self._test_results.append({
+                    "type": "wifi_native", "ssid": ssid, "bssid": bssid,
+                    "success": False, "password": password
+                })
+
+            return result
+
+        except Exception as e:
+            log.warning(f"Native WPA2 password test error: {e}")
+            return None
 
     def _http_request(self, host, port, method, path, headers=None,
                       body=None, timeout=10):
@@ -133,13 +254,25 @@ class CredentialTester:
                 except Exception:
                     pass
 
-    def test_wifi_password(self, bssid, ssid, password, timeout=15):
+    def test_wifi_password(self, bssid, ssid, password, timeout=15,
+                          handshake_frames=None):
         """
         Test Wi-Fi password using wpa_supplicant.
         Returns True if connection succeeds.
+
+        If handshake_frames are provided, attempts native WPA2 crypto
+        verification first, falling back to wpa_supplicant only if
+        the native check is not possible.
         """
         if not password:
             return False
+
+        # Try native verification first if handshake frames are available
+        if handshake_frames and _HAS_WPA2:
+            native_result = self.test_wifi_password_native(
+                bssid, ssid, password, handshake_frames)
+            if native_result is not None:
+                return native_result
 
         log.info(f"Testing Wi-Fi password for {ssid} ({bssid})...")
 
