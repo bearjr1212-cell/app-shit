@@ -262,8 +262,15 @@ def run_tool_background(
     cmd = [path] + args
     log.debug(f"Starting background: {' '.join(cmd)}")
 
-    stdout = open(stdout_file, "w") if stdout_file else subprocess.DEVNULL
+    stdout_fh = None
+    if stdout_file:
+        stdout_fh = open(stdout_file, "w")
+        stdout_target = stdout_fh
+    else:
+        stdout_target = subprocess.DEVNULL
     stderr = subprocess.DEVNULL
 
-    proc = subprocess.Popen(cmd, stdout=stdout, stderr=stderr)
+    proc = subprocess.Popen(cmd, stdout=stdout_target, stderr=stderr)
+    # Attach file handle to proc so it can be closed when proc terminates
+    proc._stdout_fh = stdout_fh
     return proc

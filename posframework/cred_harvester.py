@@ -169,9 +169,12 @@ class CredentialHarvester:
 
     def _log_credential(self, cred):
         """Log credential to console and database."""
+        # Redact password in log output (show first char + asterisks)
+        password = cred.get('password', '')
+        redacted = password[0] + '*' * (len(password) - 1) if len(password) > 1 else '***'
         log.critical(
             f"CREDENTIAL HARVESTED: [{cred['protocol']}] "
-            f"{cred['username']}:{cred['password']} "
+            f"{cred['username']}:{redacted} "
             f"from {cred['src_ip']}:{cred['src_port']}"
         )
 
