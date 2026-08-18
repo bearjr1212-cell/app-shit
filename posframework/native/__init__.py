@@ -25,6 +25,14 @@ _LIB_NAMES = [
     "libcrypto_parse",
     "libdeauth_craft",
     "libbeacon_flood",
+    "libarp_spoof",
+    "libsnmp_encode",
+    "libpcap_write",
+    "libtarget_pqueue",
+    "libstate_machine",
+    "libcrypto_accel",
+    "libtkip_mic",
+    "libccmp_aes",
 ]
 
 

@@ -93,6 +93,9 @@ Subpackages (new capabilities):
     gps/         - Async gpsd client, haversine distance, position tracking
     wpa3/        - WPA3 detection (RSN IE parsing), downgrade attacks, SAE flood
     john_integration - John the Ripper CLI wrapper for password cracking
+    tkip         - TKIP (Temporal Key Integrity Protocol) encryption/decryption
+    ccmp         - CCMP (AES-CCM) encryption/decryption
+    wpa2         - WPA2 4-way handshake state machine and key derivation
 """
 
 __version__ = "3.0.0"
@@ -401,6 +404,41 @@ except ImportError:
     JohnManager = None
     JohnMode = None
     JohnStatus = None
+
+try:
+    from .tkip import TKIPEngine, TKIPKey, TKIPRole, MICCountermeasures
+except ImportError:
+    TKIPEngine = None
+    TKIPKey = None
+    TKIPRole = None
+    MICCountermeasures = None
+
+try:
+    from .ccmp import CCMPEngine, CCMPKey, ccmp_encapsulate, ccmp_decapsulate
+except ImportError:
+    CCMPEngine = None
+    CCMPKey = None
+    ccmp_encapsulate = None
+    ccmp_decapsulate = None
+
+try:
+    from .wpa2 import (
+        WPA2Handshake, HandshakeRole, HandshakeState, CipherSuite,
+        EAPOLKeyFrame, DerivedKeys, derive_pmk, derive_ptk,
+        extract_key_hierarchy, compute_eapol_mic, verify_eapol_mic,
+    )
+except ImportError:
+    WPA2Handshake = None
+    HandshakeRole = None
+    HandshakeState = None
+    CipherSuite = None
+    EAPOLKeyFrame = None
+    DerivedKeys = None
+    derive_pmk = None
+    derive_ptk = None
+    extract_key_hierarchy = None
+    compute_eapol_mic = None
+    verify_eapol_mic = None
 
 # Subpackage re-exports for convenience
 try:
