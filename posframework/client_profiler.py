@@ -114,8 +114,8 @@ class ClientProfiler:
                 ssid = elt.info.decode(errors='ignore')
 
             if ssid:
-                profile = self._get_or_create(client_mac)
                 with self._lock:
+                    profile = self._get_or_create_locked(client_mac)
                     if ssid not in profile["probed_networks"]:
                         profile["probed_networks"].append(ssid)
                     profile["last_seen"] = time.time()
@@ -133,8 +133,8 @@ class ClientProfiler:
                 return
 
             if client_mac and bssid:
-                profile = self._get_or_create(client_mac)
                 with self._lock:
+                    profile = self._get_or_create_locked(client_mac)
                     if bssid not in profile["associated_aps"]:
                         profile["associated_aps"].append(bssid)
                     profile["last_seen"] = time.time()
@@ -272,23 +272,28 @@ class ClientProfiler:
         """Get or create a profile for a MAC address."""
         mac = mac.lower()
         with self._lock:
-            if mac not in self._profiles:
-                self._profiles[mac] = {
-                    "mac": mac,
-                    "os_fingerprint": None,
-                    "user_agent": None,
-                    "tcp_window": None,
-                    "tcp_ttl": None,
-                    "device_type": "unknown",
-                    "vendor": None,
-                    "probed_networks": [],
-                    "associated_aps": [],
-                    "credentials_captured": [],
-                    "handshakes_captured": [],
-                    "first_seen": time.time(),
-                    "last_seen": time.time(),
-                }
-            return self._profiles[mac]
+            return self._get_or_create_locked(mac)
+
+    def _get_or_create_locked(self, mac):
+        """Get or create a profile for a MAC address. Caller must hold self._lock."""
+        mac = mac.lower()
+        if mac not in self._profiles:
+            self._profiles[mac] = {
+                "mac": mac,
+                "os_fingerprint": None,
+                "user_agent": None,
+                "tcp_window": None,
+                "tcp_ttl": None,
+                "device_type": "unknown",
+                "vendor": None,
+                "probed_networks": [],
+                "associated_aps": [],
+                "credentials_captured": [],
+                "handshakes_captured": [],
+                "first_seen": time.time(),
+                "last_seen": time.time(),
+            }
+        return self._profiles[mac]
 
     def classify_device_type(self, mac, vendor=None):
         """

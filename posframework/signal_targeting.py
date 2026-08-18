@@ -8,6 +8,7 @@ to connect to our evil twin.
 RSSI threshold: Clients with RSSI > -70 dBm are considered "close range"
 """
 
+import threading
 from collections import defaultdict, deque
 
 from .config import log
@@ -19,39 +20,47 @@ class SignalTargeting:
     - Strong signal (-40 to -70 dBm): High priority (close range)
     - Medium signal (-70 to -85 dBm): Medium priority
     - Weak signal (< -85 dBm): Low priority (maybe skip)
+
+    Thread-safe: add_sample() can be called from multiple packet handler threads.
     """
 
     def __init__(self, rssi_threshold=-70):
         self.rssi_threshold = rssi_threshold
+        self._lock = threading.Lock()
         self._client_rssis = defaultdict(lambda: deque(maxlen=100))  # client_mac -> bounded deque of RSSI samples
         self._running_sum = {}  # client_mac -> running sum of samples in deque
         self._cached_avg = {}  # client_mac -> running average RSSI
         self._priority_queue = []  # Sorted list of (rssi, client_mac, bssid)
 
     def add_sample(self, client_mac, bssid, rssi):
-        """Record an RSSI sample for a client and update running average (O(1))."""
-        samples = self._client_rssis[client_mac]
-        if client_mac in self._running_sum and len(samples) > 0:
-            if len(samples) == samples.maxlen:
-                # Deque is full: the leftmost element will be evicted by append
-                evicted = samples[0]
-                self._running_sum[client_mac] -= evicted
-                self._running_sum[client_mac] += rssi
-                samples.append(rssi)
+        """Record an RSSI sample for a client and update running average (O(1)).
+
+        Thread-safe: protected by internal lock.
+        """
+        with self._lock:
+            samples = self._client_rssis[client_mac]
+            if client_mac in self._running_sum and len(samples) > 0:
+                if len(samples) == samples.maxlen:
+                    # Deque is full: the leftmost element will be evicted by append
+                    evicted = samples[0]
+                    self._running_sum[client_mac] -= evicted
+                    self._running_sum[client_mac] += rssi
+                    samples.append(rssi)
+                else:
+                    # Deque not full yet: just add to running sum
+                    self._running_sum[client_mac] += rssi
+                    samples.append(rssi)
+                self._cached_avg[client_mac] = self._running_sum[client_mac] / len(samples)
             else:
-                # Deque not full yet: just add to running sum
-                self._running_sum[client_mac] += rssi
+                # First sample for this client
+                self._running_sum[client_mac] = rssi
+                self._cached_avg[client_mac] = rssi
                 samples.append(rssi)
-            self._cached_avg[client_mac] = self._running_sum[client_mac] / len(samples)
-        else:
-            # First sample for this client
-            self._running_sum[client_mac] = rssi
-            self._cached_avg[client_mac] = rssi
-            samples.append(rssi)
 
     def get_avg_rssi(self, client_mac):
         """Get average RSSI for a client (O(1) cached lookup)."""
-        return self._cached_avg.get(client_mac, -100)
+        with self._lock:
+            return self._cached_avg.get(client_mac, -100)
 
     def get_priority(self, client_mac):
         """

@@ -69,7 +69,10 @@ TOOL_REGISTRY = {
 
 # ─── Tool Detection ──────────────────────────────────────────────────────────
 
+import threading as _threading
+
 _tool_cache: Dict[str, Optional[str]] = {}
+_tool_cache_lock = _threading.Lock()
 
 
 def which(tool_name: str) -> Optional[str]:
@@ -82,16 +85,27 @@ def which(tool_name: str) -> Optional[str]:
     Returns:
         Full path to the binary, or None if not found.
     """
-    if tool_name in _tool_cache:
-        return _tool_cache[tool_name]
+    with _tool_cache_lock:
+        if tool_name in _tool_cache:
+            return _tool_cache[tool_name]
 
     # Look up actual binary name from registry
     entry = TOOL_REGISTRY.get(tool_name)
     binary = entry["binary"] if entry else tool_name
 
     path = shutil.which(binary)
-    _tool_cache[tool_name] = path
+    with _tool_cache_lock:
+        _tool_cache[tool_name] = path
     return path
+
+
+def invalidate_cache(tool_name: str) -> None:
+    """Remove a tool from the cache so the next which() call re-checks the filesystem.
+
+    Thread-safe. Use this instead of directly mutating _tool_cache from other modules.
+    """
+    with _tool_cache_lock:
+        _tool_cache.pop(tool_name, None)
 
 
 def is_available(tool_name: str) -> bool:
@@ -250,7 +264,9 @@ def run_tool_background(
         stdout_file: Optional file path to redirect stdout.
 
     Returns:
-        Popen process handle.
+        Popen process handle. If stdout_file was provided, the file handle
+        is stored as proc._stdout_fh and must be closed when the process
+        terminates. Use stop_background_tool(proc) for safe cleanup.
 
     Raises:
         FileNotFoundError: If tool is not installed.
@@ -274,3 +290,37 @@ def run_tool_background(
     # Attach file handle to proc so it can be closed when proc terminates
     proc._stdout_fh = stdout_fh
     return proc
+
+
+def stop_background_tool(proc: subprocess.Popen, timeout: int = 10) -> int:
+    """
+    Stop a background tool process and clean up its resources.
+
+    Terminates the process, waits for exit, and closes any attached
+    file handles (stdout_fh) to prevent resource leaks.
+
+    Args:
+        proc: Popen process handle returned by run_tool_background().
+        timeout: Seconds to wait for graceful termination before killing.
+
+    Returns:
+        Process exit code.
+    """
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    # Close attached file handle if present
+    stdout_fh = getattr(proc, "_stdout_fh", None)
+    if stdout_fh is not None:
+        try:
+            stdout_fh.close()
+        except (OSError, IOError):
+            pass
+        proc._stdout_fh = None
+
+    return proc.returncode or 0

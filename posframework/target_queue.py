@@ -511,10 +511,9 @@ class TargetQueue:
         if prereq in tool_install_map:
             # Check if tool becomes available (maybe it was just not in cache)
             try:
-                from .tools import is_available, which
+                from .tools import is_available, which, invalidate_cache
                 # Clear cache and recheck
-                from .tools import _tool_cache
-                _tool_cache.pop(prereq, None)
+                invalidate_cache(prereq)
                 if is_available(prereq):
                     self._available_tools[prereq] = True
                     return True
