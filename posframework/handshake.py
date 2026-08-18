@@ -27,6 +27,28 @@ from scapy.layers.eap import EAPOL
 
 from .config import log
 
+# Optional crypto imports for post-capture decryption
+try:
+    from .ccmp import CCMPEngine, CCMPKey, ccmp_decapsulate
+    _HAS_CCMP = True
+except ImportError:
+    _HAS_CCMP = False
+
+try:
+    from .tkip import TKIPEngine, TKIPKey, TKIPRole
+    _HAS_TKIP = True
+except ImportError:
+    _HAS_TKIP = False
+
+try:
+    from .wpa2 import (
+        derive_pmk, derive_ptk, extract_key_hierarchy,
+        CipherSuite, EAPOLKeyFrame,
+    )
+    _HAS_WPA2 = True
+except ImportError:
+    _HAS_WPA2 = False
+
 
 class HandshakeCapture:
     """
@@ -327,6 +349,137 @@ class HandshakeCapture:
         """Reset the deduplication tracking set."""
         self._exported_pairs.clear()
         log.info("Handshake dedup state cleared")
+
+    def decrypt_captured_frame(self, bssid, encrypted_frame_bytes, mac_header,
+                                ptk, cipher='ccmp'):
+        """
+        Decrypt a single captured encrypted frame using the given PTK.
+
+        Instantiates the appropriate engine (CCMPEngine for CCMP, TKIPEngine
+        for TKIP) using the TK extracted from the PTK and decapsulates the
+        encrypted frame body.
+
+        Args:
+            bssid: AP BSSID string (for logging purposes)
+            encrypted_frame_bytes: The encrypted body (CCMP header + ciphertext + MIC
+                                   for CCMP, or IV + encrypted data for TKIP)
+            mac_header: 802.11 MAC header bytes (needed for AAD in CCMP)
+            ptk: Full PTK bytes (48 for CCMP, 64 for TKIP)
+            cipher: 'ccmp' or 'tkip'
+
+        Returns:
+            Decrypted plaintext bytes, or None on failure.
+        """
+        if cipher == 'ccmp':
+            if not _HAS_CCMP:
+                log.warning("CCMP module not available for frame decryption")
+                return None
+            try:
+                ccmp_key = CCMPKey.from_ptk(ptk)
+                plaintext = ccmp_decapsulate(ccmp_key.tk, mac_header,
+                                             encrypted_frame_bytes)
+                if plaintext:
+                    log.info(f"Frame decrypted (CCMP) for BSSID {bssid}")
+                return plaintext
+            except Exception as e:
+                log.warning(f"CCMP decryption failed: {e}")
+                return None
+
+        elif cipher == 'tkip':
+            if not _HAS_TKIP:
+                log.warning("TKIP module not available for frame decryption")
+                return None
+            try:
+                tkip_key = TKIPKey.from_ptk(ptk, TKIPRole.SUPPLICANT)
+                # Extract DA/SA from mac_header
+                da = mac_header[4:10]   # Address 1 (receiver)
+                sa = mac_header[10:16]  # Address 2 (transmitter)
+                engine = TKIPEngine(tkip_key, ta=sa, ra=da,
+                                    role=TKIPRole.SUPPLICANT)
+                engine.rx_tsc = -1  # Disable replay check
+                plaintext = engine.decapsulate(encrypted_frame_bytes,
+                                              da=da, sa=sa)
+                if plaintext:
+                    log.info(f"Frame decrypted (TKIP) for BSSID {bssid}")
+                return plaintext
+            except Exception as e:
+                log.warning(f"TKIP decryption failed: {e}")
+                return None
+        else:
+            log.warning(f"Unknown cipher suite: {cipher}")
+            return None
+
+    def decrypt_with_password(self, bssid, client_mac, password, ssid,
+                              encrypted_frames, cipher='ccmp'):
+        """
+        Derive PTK from password and attempt decryption of each frame.
+
+        This is a higher-level method that derives the PTK from the password
+        using the captured handshake nonces, then attempts to decrypt each
+        encrypted frame.
+
+        Args:
+            bssid: AP BSSID string (e.g. 'aa:bb:cc:dd:ee:ff')
+            client_mac: Client MAC string (e.g. '11:22:33:44:55:66')
+            password: WiFi passphrase
+            ssid: Network SSID
+            encrypted_frames: List of (mac_header, encrypted_body) tuples
+
+        Returns:
+            List of (index, plaintext) tuples for successfully decrypted frames.
+        """
+        if not _HAS_WPA2:
+            log.warning("WPA2 module not available for password-based decryption")
+            return []
+
+        # Derive PMK
+        pmk = derive_pmk(password, ssid)
+
+        # Get handshake data for this pair to extract nonces
+        key = (client_mac, bssid)
+        frames_data = self._capture.get(key)
+        if not frames_data:
+            log.warning(f"No handshake captured for {client_mac} <-> {bssid}")
+            return []
+
+        # Extract ANonce and SNonce from captured EAPOL frames
+        anonce = None
+        snonce = None
+        for frame in frames_data["frames"]:
+            if frame.haslayer(EAPOL):
+                eapol_data = raw(frame.getlayer(EAPOL))
+                if len(eapol_data) < 49:
+                    continue
+                key_info = (eapol_data[5] << 8) | eapol_data[6]
+                ack = bool(key_info & 0x0080)
+                mic = bool(key_info & 0x0100)
+                if ack and not mic:
+                    anonce = eapol_data[17:49]
+                elif not ack and mic:
+                    snonce = eapol_data[17:49]
+
+        if not anonce or not snonce:
+            log.warning("Cannot extract nonces from handshake")
+            return []
+
+        # Derive PTK
+        ap_mac_bytes = bytes.fromhex(bssid.replace(':', ''))
+        sta_mac_bytes = bytes.fromhex(client_mac.replace(':', ''))
+        cipher_suite = CipherSuite.TKIP if cipher == 'tkip' else CipherSuite.CCMP
+        ptk = derive_ptk(pmk, ap_mac_bytes, sta_mac_bytes, anonce, snonce,
+                         cipher_suite)
+
+        # Attempt decryption of each frame
+        results = []
+        for idx, (mac_header, encrypted_body) in enumerate(encrypted_frames):
+            plaintext = self.decrypt_captured_frame(bssid, encrypted_body,
+                                                   mac_header, ptk, cipher)
+            if plaintext is not None:
+                results.append((idx, plaintext))
+
+        log.info(f"Decrypted {len(results)}/{len(encrypted_frames)} frames "
+                 f"for {client_mac} <-> {bssid}")
+        return results
 
     def export_all(self):
         """Export all complete handshakes."""
