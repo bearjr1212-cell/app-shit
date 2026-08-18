@@ -29,6 +29,23 @@ The WPA2 key hierarchy:
 Group Key Handshake:
   Msg 1: AP -> STA: New GTK (encrypted) + MIC
   Msg 2: STA -> AP: ACK + MIC
+
+Integration:
+  - orchestrator.py: Uses WPA2Handshake for 4-way handshake orchestration
+    during automated attack sequences.
+  - handshake.py: Uses EAPOLKeyFrame.parse() and derive_ptk() for live
+    handshake capture and key derivation.
+  - krack.py: Uses HandshakeState and EAPOLKeyFrame to detect and exploit
+    KRACK key reinstallation vulnerabilities.
+  - attack_chain.py: Uses WPA2Handshake state machine to drive multi-stage
+    attack chains requiring handshake completion.
+  - recon.py: Uses EAPOLKeyFrame.parse() and key_descriptor_version to
+    identify cipher suites (CCMP/TKIP) from captured EAPOL frames.
+  - cred_tester.py: Uses derive_pmk() and verify_eapol_mic() to test
+    candidate passwords against captured handshakes.
+  - pmkid.py: Uses PMK derivation for PMKID-based attack validation.
+  - autopwn_engine.py: Uses WPA2Handshake and CipherSuite to select
+    appropriate attack strategies based on target security profile.
 """
 
 import hashlib

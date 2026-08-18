@@ -23,6 +23,18 @@ Key hierarchy within PTK for TKIP:
 
 Note: TKIP is deprecated (IEEE 802.11-2012) but still found in legacy
 POS environments that haven't migrated to CCMP/WPA2-only configurations.
+
+Integration:
+  - handshake.py: Uses TKIPEngine for frame decryption when PTK derivation
+    indicates TKIP cipher suite (key_length=32 in EAPOL).
+  - krack.py: Uses TKIPEngine to demonstrate Michael MIC key recovery via
+    KRACK nonce reuse on TKIP-protected frames.
+  - tshark_decrypt.py: Uses TKIPEngine as fallback decryption when CCMP
+    is not negotiated.
+  - orchestrator.py: References TKIP cipher suite when identifying legacy
+    targets vulnerable to MIC-based attacks.
+  - recon.py: Identifies TKIP cipher from handshake key descriptor version
+    (v1 = HMAC-MD5/RC4 = TKIP).
 """
 
 import struct

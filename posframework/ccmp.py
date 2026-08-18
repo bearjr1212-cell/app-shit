@@ -28,6 +28,18 @@ CCMP header (8 bytes) in encrypted frame:
   Byte 5: PN3
   Byte 6: PN4
   Byte 7: PN5
+
+Integration:
+  - handshake.py: Uses CCMPEngine for frame decryption after PTK derivation
+    from captured 4-way handshake.
+  - krack.py: Uses ccmp_decapsulate() to decrypt frames after KRACK key
+    reinstallation, demonstrating nonce reuse impact.
+  - tshark_decrypt.py: Uses NativeDecryptionEngine backed by CCMPEngine for
+    real-time decryption of captured WPA2 traffic.
+  - orchestrator.py: References CCMP cipher suite when selecting attack
+    parameters for WPA2-CCMP targets.
+  - recon.py: Identifies CCMP cipher from handshake key descriptor version
+    (v2 = HMAC-SHA1/AES = CCMP).
 """
 
 import struct
