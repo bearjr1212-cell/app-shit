@@ -3,15 +3,27 @@ SQLite Database Layer
 ─────────────────────
 WAL mode, batched commits, indexed tables for APs, clients, deauth events,
 EAPOL handshake frames, and harvested credentials.
+
+Supports context manager protocol for safe usage:
+    with POSDatabase() as db:
+        db.update_ap(...)
+    # Automatically flushed and closed
 """
 
+import json
+import os
+import re
 import sqlite3
 import time
 import threading
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import DB_NAME, COMMIT_INTERVAL, log
 from .intel import is_pos_ssid
+
+# MAC address validation pattern
+_MAC_RE = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 
 
 class POSDatabase:
@@ -20,16 +32,62 @@ class POSDatabase:
     BATCH_FLUSH_SIZE = 50
 
     def __init__(self, db_path=None):
-        self.conn = sqlite3.connect(db_path or DB_NAME, check_same_thread=False)
+        self._db_path = db_path or DB_NAME
+        try:
+            self.conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        except sqlite3.Error as e:
+            log.error(f"Database connection failed ({self._db_path}): {e}")
+            raise
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-8000")
         self.conn.execute("PRAGMA temp_store=MEMORY")
         self.cursor = self.conn.cursor()
         self._lock = threading.Lock()
+        self._closed = False
         self._setup_tables()
         self._last_commit = time.monotonic()
         self._write_buffer = []
+
+    # ─── Context Manager Protocol ─────────────────────────────────────────────
+
+    def __enter__(self):
+        """Support `with POSDatabase() as db:` usage pattern."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Flush and close on context exit."""
+        self.close()
+        return False  # Don't suppress exceptions
+
+    def __del__(self):
+        """Fallback: flush and close on garbage collection if not already closed."""
+        if not self._closed:
+            try:
+                self.close()
+            except Exception:
+                pass
+
+    # ─── Query Helpers ─────────────────────────────────────────────────────────
+
+    def _query_as_dicts(self, sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
+        """Execute a SELECT query and return results as a list of dicts.
+
+        Eliminates repeated boilerplate of:
+            columns = [desc[0] for desc in self.cursor.description]
+            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+
+        Args:
+            sql: SQL SELECT query string.
+            params: Optional query parameters tuple.
+
+        Returns:
+            List of dictionaries, one per row, with column names as keys.
+        """
+        with self._lock:
+            self.cursor.execute(sql, params)
+            columns = [desc[0] for desc in self.cursor.description]
+            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
 
     def _setup_tables(self):
         with self._lock:
@@ -303,7 +361,7 @@ class POSDatabase:
                 (client_ip, client_mac or "", username, password, url, now))
             self.conn.commit()
         log.critical(f"CREDENTIAL CAPTURED: user='{username}' from {client_ip}")
-        log.debug(f"  Password: {'*' * len(password)}")
+        log.debug("  Password: ****")  # Fixed-length mask to avoid leaking password length
 
     # ─── Printer helper methods ─────────────────────────────────────────────────
 
@@ -355,22 +413,15 @@ class POSDatabase:
 
     def get_printers(self):
         """Return all discovered printers."""
-        with self._lock:
-            self.cursor.execute('SELECT * FROM printers ORDER BY discovery_time DESC')
-            columns = [desc[0] for desc in self.cursor.description]
-            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+        return self._query_as_dicts('SELECT * FROM printers ORDER BY discovery_time DESC')
 
     def get_print_jobs(self, printer_ip=None):
         """Return intercepted print jobs, optionally filtered by printer IP."""
-        with self._lock:
-            if printer_ip:
-                self.cursor.execute(
-                    'SELECT * FROM print_jobs WHERE printer_ip = ? ORDER BY timestamp DESC',
-                    (printer_ip,))
-            else:
-                self.cursor.execute('SELECT * FROM print_jobs ORDER BY timestamp DESC')
-            columns = [desc[0] for desc in self.cursor.description]
-            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+        if printer_ip:
+            return self._query_as_dicts(
+                'SELECT * FROM print_jobs WHERE printer_ip = ? ORDER BY timestamp DESC',
+                (printer_ip,))
+        return self._query_as_dicts('SELECT * FROM print_jobs ORDER BY timestamp DESC')
 
     # ─── Enrichment and profiling helper methods ────────────────────────────────
 
@@ -393,15 +444,11 @@ class POSDatabase:
 
     def get_enriched_credentials(self, client_mac=None):
         """Return enriched credentials, optionally filtered by client MAC."""
-        with self._lock:
-            if client_mac:
-                self.cursor.execute(
-                    'SELECT * FROM enriched_credentials WHERE client_mac = ? ORDER BY timestamp DESC',
-                    (client_mac,))
-            else:
-                self.cursor.execute('SELECT * FROM enriched_credentials ORDER BY timestamp DESC')
-            columns = [desc[0] for desc in self.cursor.description]
-            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+        if client_mac:
+            return self._query_as_dicts(
+                'SELECT * FROM enriched_credentials WHERE client_mac = ? ORDER BY timestamp DESC',
+                (client_mac,))
+        return self._query_as_dicts('SELECT * FROM enriched_credentials ORDER BY timestamp DESC')
 
     def store_client_profile(self, mac, os_fingerprint, device_type,
                              probed_networks, first_seen, last_seen):
@@ -421,10 +468,7 @@ class POSDatabase:
 
     def get_client_profiles(self):
         """Return all client profiles."""
-        with self._lock:
-            self.cursor.execute('SELECT * FROM client_profiles ORDER BY last_seen DESC')
-            columns = [desc[0] for desc in self.cursor.description]
-            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+        return self._query_as_dicts('SELECT * FROM client_profiles ORDER BY last_seen DESC')
 
     def store_credential_correlation(self, identity_id, credential_id, correlation_score):
         """Store a credential correlation link."""
@@ -438,15 +482,11 @@ class POSDatabase:
 
     def get_credential_correlations(self, identity_id=None):
         """Return credential correlations, optionally filtered by identity."""
-        with self._lock:
-            if identity_id:
-                self.cursor.execute(
-                    'SELECT * FROM credential_correlations WHERE identity_id = ?',
-                    (identity_id,))
-            else:
-                self.cursor.execute('SELECT * FROM credential_correlations')
-            columns = [desc[0] for desc in self.cursor.description]
-            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+        if identity_id:
+            return self._query_as_dicts(
+                'SELECT * FROM credential_correlations WHERE identity_id = ?',
+                (identity_id,))
+        return self._query_as_dicts('SELECT * FROM credential_correlations')
 
     # ─── VLAN and network segmentation helper methods ─────────────────────────
 
@@ -502,17 +542,11 @@ class POSDatabase:
 
     def get_vlans(self):
         """Return all discovered VLANs."""
-        with self._lock:
-            self.cursor.execute('SELECT * FROM vlans ORDER BY vlan_id')
-            columns = [desc[0] for desc in self.cursor.description]
-            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+        return self._query_as_dicts('SELECT * FROM vlans ORDER BY vlan_id')
 
     def get_segments(self):
         """Return all network segments."""
-        with self._lock:
-            self.cursor.execute('SELECT * FROM network_segments ORDER BY vlan_id')
-            columns = [desc[0] for desc in self.cursor.description]
-            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+        return self._query_as_dicts('SELECT * FROM network_segments ORDER BY vlan_id')
 
     # ─── Query methods (used by orchestrator for auto-targeting) ──────────────
 
@@ -576,32 +610,93 @@ class POSDatabase:
                         ssids.add(ssid)
             return list(ssids)
 
-    def get_stats(self):
-        stats = {}
+    def get_stats(self) -> Dict[str, int]:
+        """Return counts of all major record types in a single query batch.
+
+        Returns:
+            Dictionary with keys: access_points, pos_access_points, clients,
+            pos_clients, deauth_events, eapol_frames, credentials.
+        """
         with self._lock:
-            for label, query in [
-                ("access_points", "SELECT COUNT(*) FROM access_points"),
-                ("pos_access_points", "SELECT COUNT(*) FROM access_points WHERE is_pos_vendor=1 OR is_pos_ssid=1"),
-                ("clients", "SELECT COUNT(*) FROM clients"),
-                ("pos_clients", "SELECT COUNT(*) FROM clients WHERE is_pos_vendor=1"),
-                ("deauth_events", "SELECT COUNT(*) FROM deauth_events"),
-                ("eapol_frames", "SELECT COUNT(*) FROM eapol_frames"),
-                ("credentials", "SELECT COUNT(*) FROM credentials"),
-            ]:
-                self.cursor.execute(query)
-                stats[label] = self.cursor.fetchone()[0]
-        return stats
+            self.cursor.execute('''
+                SELECT
+                    (SELECT COUNT(*) FROM access_points) AS access_points,
+                    (SELECT COUNT(*) FROM access_points WHERE is_pos_vendor=1 OR is_pos_ssid=1) AS pos_access_points,
+                    (SELECT COUNT(*) FROM clients) AS clients,
+                    (SELECT COUNT(*) FROM clients WHERE is_pos_vendor=1) AS pos_clients,
+                    (SELECT COUNT(*) FROM deauth_events) AS deauth_events,
+                    (SELECT COUNT(*) FROM eapol_frames) AS eapol_frames,
+                    (SELECT COUNT(*) FROM credentials) AS credentials
+            ''')
+            row = self.cursor.fetchone()
+            return {
+                "access_points": row[0],
+                "pos_access_points": row[1],
+                "clients": row[2],
+                "pos_clients": row[3],
+                "deauth_events": row[4],
+                "eapol_frames": row[5],
+                "credentials": row[6],
+            }
+
+    def export_all(self, output_path: str = "exports/database_export.json") -> str:
+        """Export all database tables to a JSON file.
+
+        Args:
+            output_path: Path for the output JSON file.
+
+        Returns:
+            The output file path.
+        """
+        data = {
+            "exported_at": datetime.now().isoformat(timespec='seconds'),
+            "stats": self.get_stats(),
+            "access_points": self._query_as_dicts('SELECT * FROM access_points ORDER BY rssi DESC'),
+            "clients": self._query_as_dicts('SELECT * FROM clients ORDER BY last_seen DESC'),
+            "credentials": self._query_as_dicts('SELECT * FROM credentials ORDER BY timestamp DESC'),
+            "printers": self._query_as_dicts('SELECT * FROM printers ORDER BY discovery_time DESC'),
+            "vlans": self._query_as_dicts('SELECT * FROM vlans ORDER BY vlan_id'),
+            "enriched_credentials": self._query_as_dicts('SELECT * FROM enriched_credentials'),
+        }
+
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+        log.info(f"Database exported to {output_path}")
+        return output_path
+
+    def vacuum(self):
+        """Compact the database and reclaim unused space.
+
+        Should be called after large deletions or at end of session.
+        WAL checkpoint is performed first to merge WAL into main DB.
+        """
+        self._flush_buffer()
+        with self._lock:
+            self.conn.commit()
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self.conn.execute("VACUUM")
+        log.info("Database vacuumed and compacted")
 
     def flush(self):
+        """Flush all buffered writes and commit to disk."""
         self._flush_buffer()
         with self._lock:
             self.conn.commit()
 
     def close(self):
+        """Flush, commit, and close the database connection."""
+        if self._closed:
+            return
         self._flush_buffer()
         with self._lock:
-            self.conn.commit()
-            self.conn.close()
+            try:
+                self.conn.commit()
+                self.conn.close()
+            except sqlite3.Error as e:
+                log.warning(f"Database close error: {e}")
+            finally:
+                self._closed = True
 
 
 # Alias for backward compatibility
