@@ -1,0 +1,14 @@
+{
+  "task_id": "task-follow-up-integration",
+  "task_description": "Complete follow-up integration pass wiring wpa2.py, ccmp.py, and tkip.py into all consuming modules (orchestrator, handshake, krack, attack_chain, tshark_decrypt, autopwn_engine, cred_tester, pmkid, recon) to make the framework cohesive.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "pass",
+    "tests": "pass",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "463 tests pass, 4 pre-existing failures (pyyaml). Merged fix/comprehensive-bug-fixes branch and addressed all 7 review issues: iterator exhaustion, stale PTK cache, cipher detection from EAPOL key_info, dead code wiring, shared extract_handshake_pair helper, and docstring documentation."
+  }
+}
