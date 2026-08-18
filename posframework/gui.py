@@ -507,6 +507,7 @@ class EngineStatus:
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
+    PREVIOUSLY_ACTIVE = "previously_active"
 
     def __init__(self, name: str, engine_class=None):
         self.name = name
@@ -759,6 +760,9 @@ class TerminalUI:
         self.chip_detector = None
         self.session_manager = None
 
+        # Track acquired adapter pools for release on engine stop
+        self._active_pools: Dict[str, List] = {}
+
         # Initialize infrastructure
         self._init_infrastructure()
 
@@ -929,9 +933,9 @@ class TerminalUI:
                     engine_key = full_key[len(prefix):]
                     engine = engines.get(engine_key)
                     if engine is not None:
-                        # Mark as previously running so UI can display state
+                        # Mark as previously active so UI shows saved state
                         # (actual process restart requires user action)
-                        engine.status = EngineStatus.IDLE
+                        engine.status = EngineStatus.PREVIOUSLY_ACTIVE
                     break
 
     def _save_attack_state(self) -> None:
@@ -1342,6 +1346,9 @@ class TerminalUI:
             elif engine.status == EngineStatus.SUCCESS:
                 status = "[DONE]"
                 status_color = curses.color_pair(COLOR_SUCCESS)
+            elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
+                status = "[SAVED]"
+                status_color = curses.color_pair(COLOR_WARNING)
             else:
                 status = "[IDLE]"
                 status_color = curses.color_pair(COLOR_NORMAL)
@@ -1384,6 +1391,9 @@ class TerminalUI:
             elif engine.status == EngineStatus.FAILED:
                 status = "[FAILED]"
                 status_color = curses.color_pair(COLOR_ERROR)
+            elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
+                status = "[SAVED]"
+                status_color = curses.color_pair(COLOR_WARNING)
             else:
                 status = "[IDLE]"
                 status_color = curses.color_pair(COLOR_NORMAL)
@@ -1426,6 +1436,9 @@ class TerminalUI:
             if engine.is_running:
                 status = "[RUNNING]"
                 status_color = curses.color_pair(COLOR_RUNNING)
+            elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
+                status = "[SAVED]"
+                status_color = curses.color_pair(COLOR_WARNING)
             else:
                 status = "[IDLE]"
                 status_color = curses.color_pair(COLOR_NORMAL)
@@ -1489,6 +1502,9 @@ class TerminalUI:
             elif engine.status == EngineStatus.FAILED:
                 status = "[FAILED]"
                 status_color = curses.color_pair(COLOR_ERROR)
+            elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
+                status = "[SAVED]"
+                status_color = curses.color_pair(COLOR_WARNING)
             else:
                 status = "[IDLE]"
                 status_color = curses.color_pair(COLOR_NORMAL)
@@ -1531,6 +1547,9 @@ class TerminalUI:
             elif engine.status == EngineStatus.FAILED:
                 status = "[FAILED]"
                 status_color = curses.color_pair(COLOR_ERROR)
+            elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
+                status = "[SAVED]"
+                status_color = curses.color_pair(COLOR_WARNING)
             else:
                 status = "[IDLE]"
                 status_color = curses.color_pair(COLOR_NORMAL)
@@ -2108,6 +2127,9 @@ class TerminalUI:
                 )
                 loop.close()
                 kwargs["interfaces"] = [iface.name for iface in pool] if pool else []
+                # Store pool reference for release when engine stops
+                if pool:
+                    self._active_pools[key] = pool
             except Exception:
                 kwargs["interfaces"] = []
 
@@ -2222,6 +2244,24 @@ class TerminalUI:
             # Fallback if TaskType is not available
             return None
 
+    def _release_engine_pool(self, key: str) -> None:
+        """Release adapter pool acquired for an engine back to the load balancer.
+
+        Called when an engine is stopped to free up workload slots so
+        the least_loaded strategy remains accurate.
+
+        Args:
+            key: The engine key used when the pool was acquired.
+        """
+        pool = self._active_pools.pop(key, None)
+        if pool and self.load_balancer is not None:
+            try:
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(self.load_balancer.release_pool(pool))
+                loop.close()
+            except Exception:
+                pass
+
     # ================================================================
     # WIFI ATTACK ACTIONS
     # ================================================================
@@ -2237,6 +2277,7 @@ class TerminalUI:
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
             else:
+                self._release_engine_pool(key)
                 self.status_message = f"Stopped: {engine.name}"
             self._save_attack_state()
 
@@ -2255,6 +2296,7 @@ class TerminalUI:
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
             else:
+                self._release_engine_pool(key)
                 self.status_message = f"Stopped: {engine.name}"
             self._save_attack_state()
 
@@ -2273,6 +2315,7 @@ class TerminalUI:
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
             else:
+                self._release_engine_pool(key)
                 self.status_message = f"Stopped: {engine.name}"
             self._save_attack_state()
 
@@ -2291,6 +2334,7 @@ class TerminalUI:
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
             else:
+                self._release_engine_pool(key)
                 self.status_message = f"Stopped: {engine.name}"
 
     # ================================================================
@@ -2308,6 +2352,7 @@ class TerminalUI:
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
             else:
+                self._release_engine_pool(key)
                 self.status_message = f"Stopped: {engine.name}"
 
     # ================================================================
