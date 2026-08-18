@@ -95,6 +95,12 @@ class AttackPersistence:
             data = json.dumps(state, indent=2, default=str)
             temp_path.write_text(data, encoding="utf-8")
             temp_path.replace(self.state_path)
+            # Restrict file permissions to owner-only (0600) to protect
+            # sensitive data (target MACs, IPs, interface names)
+            try:
+                os.chmod(self.state_path, 0o600)
+            except OSError:
+                pass
             logger.debug("Attack state saved to %s", self.state_path)
             return True
         except (OSError, TypeError, ValueError) as e:

@@ -14,6 +14,7 @@ information about signal quality, node presence, and channel usage.
 Ideal for live reconnaissance with minimal resource overhead.
 """
 
+import atexit
 import os
 import re
 import signal
@@ -25,6 +26,23 @@ from typing import Dict, List, Optional
 
 from posframework.config import log
 from posframework.tools import is_available, which
+
+# Track temp files for atexit cleanup in case of unclean shutdown
+_horst_temp_files: List[str] = []
+
+
+def _cleanup_horst_temp_files():
+    """Remove any lingering horst temp files on interpreter exit."""
+    for path in _horst_temp_files:
+        try:
+            if os.path.isfile(path):
+                os.unlink(path)
+        except OSError:
+            pass
+    _horst_temp_files.clear()
+
+
+atexit.register(_cleanup_horst_temp_files)
 
 
 @dataclass
@@ -140,6 +158,8 @@ class Horst:
         )
         self._output_file = tmp.name
         tmp.close()
+        # Register for atexit cleanup in case of unclean shutdown
+        _horst_temp_files.append(self._output_file)
 
         path = which("horst")
         if not path:
@@ -391,6 +411,11 @@ class Horst:
                 try:
                     os.unlink(self._output_file)
                 except OSError:
+                    pass
+                # Remove from atexit list since we cleaned up normally
+                try:
+                    _horst_temp_files.remove(self._output_file)
+                except ValueError:
                     pass
         except AttributeError:
             pass

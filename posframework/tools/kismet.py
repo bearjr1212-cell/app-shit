@@ -13,6 +13,7 @@ passively and provides a rich REST API for querying discovered devices.
 """
 
 import json
+import os
 import signal
 import subprocess
 import time
@@ -78,8 +79,8 @@ class KismetClient:
 
     DEFAULT_HOST = "localhost"
     DEFAULT_PORT = 2501
-    DEFAULT_USER = "posframework"
-    DEFAULT_PASSWORD = "posframework"
+    DEFAULT_USER = os.environ.get("KISMET_USER", "posframework")
+    DEFAULT_PASSWORD = os.environ.get("KISMET_PASSWORD", "posframework")
 
     def __init__(
         self,

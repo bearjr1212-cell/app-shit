@@ -12,6 +12,7 @@ of remote hosts without sending any packets. Ideal for stealthy
 intelligence gathering before launching targeted attacks.
 """
 
+import atexit
 import os
 import re
 import signal
@@ -23,6 +24,23 @@ from typing import Dict, List, Optional
 
 from posframework.config import log
 from posframework.tools import is_available, which, run_tool_background
+
+# Track temp files for atexit cleanup in case of unclean shutdown
+_p0f_temp_files: List[str] = []
+
+
+def _cleanup_p0f_temp_files():
+    """Remove any lingering p0f temp files on interpreter exit."""
+    for path in _p0f_temp_files:
+        try:
+            if os.path.isfile(path):
+                os.unlink(path)
+        except OSError:
+            pass
+    _p0f_temp_files.clear()
+
+
+atexit.register(_cleanup_p0f_temp_files)
 
 
 @dataclass
@@ -110,6 +128,8 @@ class P0F:
         )
         self._output_file = tmp.name
         tmp.close()
+        # Register for atexit cleanup in case of unclean shutdown
+        _p0f_temp_files.append(self._output_file)
 
         path = which("p0f")
         if not path:
@@ -281,6 +301,11 @@ class P0F:
                 try:
                     os.unlink(self._output_file)
                 except OSError:
+                    pass
+                # Remove from atexit list since we cleaned up normally
+                try:
+                    _p0f_temp_files.remove(self._output_file)
+                except ValueError:
                     pass
         except AttributeError:
             pass

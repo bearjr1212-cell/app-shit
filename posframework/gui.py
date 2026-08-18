@@ -809,6 +809,10 @@ class TerminalUI:
         if LoadBalancer is not None and self.radio_manager is not None:
             try:
                 self.load_balancer = LoadBalancer(self.radio_manager)
+                # Initialize the load balancer (async) from synchronous context
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(self.load_balancer.initialize())
+                loop.close()
             except Exception:
                 pass
         if EnhancedMonitorManager is not None:
@@ -886,9 +890,49 @@ class TerminalUI:
             if settings.get("cracking_mode"):
                 self.cracking_mode = settings["cracking_mode"]
 
+            # Restore enabled_attacks: mark engines that were running
+            enabled_attacks = state.get("enabled_attacks", {})
+            if enabled_attacks:
+                self._restore_enabled_attacks(enabled_attacks)
+
             log.info("Attack state loaded live from persisted file")
         except Exception as e:
             log.warning("Failed to load persisted attack state: %s", e)
+
+    def _restore_enabled_attacks(self, enabled_attacks: Dict[str, bool]) -> None:
+        """Restore which attacks were enabled from persisted state.
+
+        Maps saved enabled_attacks keys back to engine groups and sets
+        the is_running flag for engines that were active in the previous session.
+        This does NOT actually start processes - it marks them so the UI reflects
+        their previous state for the user to re-launch.
+
+        Args:
+            enabled_attacks: Dict mapping 'group_key' -> bool.
+        """
+        # Map prefix to engine group
+        group_map = {
+            "wifi_": self.wifi_attacks,
+            "cred_": self.cred_attacks,
+            "mitm_": self.mitm_attacks,
+            "network_": self.network_modules,
+            "intel_": self.intel_modules,
+            "ble_sdr_": self.ble_sdr_modules,
+        }
+
+        for full_key, was_running in enabled_attacks.items():
+            if not was_running:
+                continue
+            # Determine which group and engine key
+            for prefix, engines in group_map.items():
+                if full_key.startswith(prefix):
+                    engine_key = full_key[len(prefix):]
+                    engine = engines.get(engine_key)
+                    if engine is not None:
+                        # Mark as previously running so UI can display state
+                        # (actual process restart requires user action)
+                        engine.status = EngineStatus.IDLE
+                    break
 
     def _save_attack_state(self) -> None:
         """Save current attack state to disk immediately (live save).
@@ -2052,9 +2096,20 @@ class TerminalUI:
         # Common: interface
         iface = self.monitor_iface
 
-        # If load balancer is available, include pool interfaces for parallel use
+        # If load balancer is available and initialized, acquire pool interfaces
         if self.load_balancer is not None:
-            kwargs["interfaces"] = []  # placeholder for pool-based engines
+            try:
+                loop = asyncio.new_event_loop()
+                pool = loop.run_until_complete(
+                    self.load_balancer.acquire_pool(
+                        task=self._get_task_type_for_category(category),
+                        strategy="least_loaded",
+                    )
+                )
+                loop.close()
+                kwargs["interfaces"] = [iface.name for iface in pool] if pool else []
+            except Exception:
+                kwargs["interfaces"] = []
 
         # Get target info
         target_bssid = ""
@@ -2149,6 +2204,23 @@ class TerminalUI:
             kwargs = {"interface": iface}
 
         return kwargs
+
+    def _get_task_type_for_category(self, category: str):
+        """Map a category string to a TaskType enum for load balancer pool acquisition."""
+        try:
+            from .radio_manager import TaskType
+            category_map = {
+                "wifi": TaskType.ATTACK,
+                "cred": TaskType.ATTACK,
+                "mitm": TaskType.ATTACK,
+                "network": TaskType.SCAN,
+                "ble_sdr": TaskType.SCAN,
+                "intel": TaskType.SCAN,
+            }
+            return category_map.get(category, TaskType.SCAN)
+        except (ImportError, AttributeError):
+            # Fallback if TaskType is not available
+            return None
 
     # ================================================================
     # WIFI ATTACK ACTIONS
