@@ -1226,7 +1226,9 @@ class TerminalUI:
         view_label = "Access Points" if self.target_view == "ap" else "Clients"
         header = f" [{view_label}] Sort: {sort_name} | Space: Toggle AP/Client View | s: Cycle Sort"
         if self.recon_running:
-            header += " | a: Stop Recon & Attack"
+            header += " | a: Stop Recon & Attack | x: Stop Recon"
+        else:
+            header += " | r: Start Recon"
         self._safe_addstr(stdscr, start_y, 1, header, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
 
         if self.target_view == "ap":
@@ -1255,9 +1257,9 @@ class TerminalUI:
             bssid = ap.get("bssid", "??:??:??:??:??:??")[:17]
             ssid = ap.get("ssid", "<hidden>")[:20]
             ch = str(ap.get("channel", "?"))[:3]
-            sec = ap.get("security", "?")[:8]
+            sec = (ap.get("security") or "?")[:8]
             rssi = str(ap.get("rssi", "?"))[:5]
-            vendor = ap.get("vendor", "")[:12]
+            vendor = (ap.get("vendor") or "")[:12]
             pos = "YES" if ap.get("is_pos", False) else ""
             cli_count = str(ap.get("client_count", 0))[:4]
 
@@ -1885,7 +1887,15 @@ class TerminalUI:
         elif key == ord('e') or key == ord('E'):
             self._handle_export()
         elif key == ord('r') or key == ord('R'):
-            self._handle_refresh()
+            # In Targets tab: start recon. Elsewhere: refresh.
+            if TABS[self.active_tab] == "Targets" and not self.recon_running:
+                self._start_recon()
+            else:
+                self._handle_refresh()
+        elif key == ord('x') or key == ord('X'):
+            # Stop recon without attacking
+            if self.recon_running:
+                self._stop_recon()
         elif key == ord('f') or key == ord('/'):
             self._start_input("Filter", "filter", self._apply_filter)
 

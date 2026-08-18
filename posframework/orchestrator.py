@@ -65,7 +65,7 @@ class AttackOrchestrator:
                  enable_hashcat=True, hashcat_wordlist=None,
                  enable_vlan_scan=True,
                  plugins=None, plugins_dir=None,
-                 enable_autopwn=True, autopwn_config=None):
+                 enable_autopwn=False, autopwn_config=None):
         self.monitor_iface = monitor_iface
         self.ap_iface = ap_iface
         self.channels = channels or CHANNELS_24GHZ
@@ -211,6 +211,7 @@ class AttackOrchestrator:
         This is the modern entry point. The legacy start() method will
         delegate here if enable_autopwn is True.
         """
+        import asyncio as _asyncio
         from .autopwn_engine import AutoPwnEngine, AutoPwnConfig, AutoPwnMode
 
         config = self._autopwn_config
@@ -247,8 +248,8 @@ class AttackOrchestrator:
             await self._autopwn_engine.start()
             # Engine runs until stopped externally
             while self._autopwn_engine.is_running:
-                await asyncio.sleep(1.0)
-        except asyncio.CancelledError:
+                await _asyncio.sleep(1.0)
+        except _asyncio.CancelledError:
             pass
         finally:
             if self._autopwn_engine.is_running:
