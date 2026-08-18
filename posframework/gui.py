@@ -621,6 +621,37 @@ class EngineStatus:
             self.start(*args, **kwargs)
 
 
+# ---- Logging handler for curses mode ----
+
+class _CursesLogHandler(logging.Handler):
+    """Logging handler that captures log records into the TerminalUI activity feed.
+
+    When the curses GUI is active, stderr output corrupts the display.
+    This handler intercepts all log records and routes them to the UI's
+    internal activity feed deque, which is displayed within the curses panels.
+    """
+
+    def __init__(self, ui_instance):
+        super().__init__()
+        self._ui = ui_instance
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            # Route to the UI's activity feed
+            level_map = {
+                "CRITICAL": "critical",
+                "ERROR": "error",
+                "WARNING": "warning",
+                "INFO": "info",
+                "DEBUG": "debug",
+            }
+            category = level_map.get(record.levelname, "info")
+            self._ui._log_activity(msg, category)
+        except Exception:
+            pass  # Never let logging errors crash the UI
+
+
 # ---- Main Terminal UI Class ----
 
 class TerminalUI:
@@ -1062,10 +1093,65 @@ class TerminalUI:
             print("Use 'python -m posframework recon' or other CLI modes directly.")
             return
         try:
+            # Redirect logging away from stderr while curses is active.
+            # Log messages written to stderr corrupt the curses display.
+            # We capture them in a deque and display inside the UI instead.
+            self._setup_gui_logging()
             curses.wrapper(self._main_loop)
         except curses.error as e:
             print(f"Terminal UI error: {e}")
             print("Ensure your terminal supports curses (not a pipe or redirect).")
+        finally:
+            self._restore_logging()
+
+    def _setup_gui_logging(self):
+        """Redirect framework logging to an internal buffer for curses display.
+
+        Removes all existing handlers from the POSFramework logger and replaces
+        them with a handler that writes to self._log_buffer (a deque shown in
+        the activity feed). Saves original handlers for restoration on exit.
+        """
+        self._original_handlers = log.handlers[:]
+        self._original_level = log.level
+
+        # Remove stderr handlers to prevent curses corruption
+        for handler in log.handlers[:]:
+            log.removeHandler(handler)
+
+        # Add a custom handler that captures to our deque
+        self._log_handler = _CursesLogHandler(self)
+        self._log_handler.setLevel(logging.DEBUG)
+        self._log_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+        )
+        log.addHandler(self._log_handler)
+
+        # Also redirect the root logger to avoid stray library output
+        root = logging.getLogger()
+        self._original_root_handlers = root.handlers[:]
+        for handler in root.handlers[:]:
+            if hasattr(handler, 'stream') and hasattr(handler.stream, 'fileno'):
+                try:
+                    if handler.stream.fileno() in (1, 2):  # stdout/stderr
+                        root.removeHandler(handler)
+                except (ValueError, OSError):
+                    pass
+
+    def _restore_logging(self):
+        """Restore original logging handlers after curses exits."""
+        # Restore POSFramework logger
+        if hasattr(self, '_log_handler'):
+            log.removeHandler(self._log_handler)
+        if hasattr(self, '_original_handlers'):
+            for handler in self._original_handlers:
+                log.addHandler(handler)
+
+        # Restore root logger
+        if hasattr(self, '_original_root_handlers'):
+            root = logging.getLogger()
+            for handler in self._original_root_handlers:
+                if handler not in root.handlers:
+                    root.addHandler(handler)
 
     # ================================================================
     # MAIN LOOP
@@ -1552,27 +1638,82 @@ class TerminalUI:
         self._safe_addstr(stdscr, 2, 0, separator, curses.color_pair(COLOR_DIVIDER))
 
     def _draw_content(self, stdscr, h, w):
-        """Draw content based on active tab."""
+        """Draw content based on active tab, with activity log at bottom."""
         # Content area: row 3 to h-3
+        # Reserve bottom 6 rows of content area for activity log
+        log_panel_height = min(6, max(3, (h - 6) // 4))
+        content_h = h - log_panel_height  # tabs get full height minus log panel
+
         tab = TABS[self.active_tab]
         if tab == "Targets":
-            self._draw_targets_tab(stdscr, h, w)
+            self._draw_targets_tab(stdscr, content_h, w)
         elif tab == "WiFi Attacks":
-            self._draw_wifi_attacks_tab(stdscr, h, w)
+            self._draw_wifi_attacks_tab(stdscr, content_h, w)
         elif tab == "Cred Attacks":
-            self._draw_cred_attacks_tab(stdscr, h, w)
+            self._draw_cred_attacks_tab(stdscr, content_h, w)
         elif tab == "MITM":
-            self._draw_mitm_tab(stdscr, h, w)
+            self._draw_mitm_tab(stdscr, content_h, w)
         elif tab == "Network":
-            self._draw_network_tab(stdscr, h, w)
+            self._draw_network_tab(stdscr, content_h, w)
         elif tab == "BLE/SDR":
-            self._draw_ble_sdr_tab(stdscr, h, w)
+            self._draw_ble_sdr_tab(stdscr, content_h, w)
         elif tab == "Harvester":
-            self._draw_harvester_tab(stdscr, h, w)
+            self._draw_harvester_tab(stdscr, content_h, w)
         elif tab == "Cracking":
-            self._draw_cracking_tab(stdscr, h, w)
+            self._draw_cracking_tab(stdscr, content_h, w)
         elif tab == "Settings":
-            self._draw_settings_tab(stdscr, h, w)
+            self._draw_settings_tab(stdscr, content_h, w)
+
+        # Draw activity log panel at bottom of content area
+        self._draw_activity_log(stdscr, h, w, content_h)
+
+    def _draw_activity_log(self, stdscr, h, w, start_y):
+        """Draw the activity log panel showing recent log messages.
+
+        Renders the last N entries from self.activity_feed in a bordered
+        panel at the bottom of the content area, above the status bar.
+        """
+        panel_top = start_y
+        panel_bottom = h - 3  # Leave room for status + help bars
+        available_rows = panel_bottom - panel_top - 1  # -1 for header
+
+        if available_rows < 2:
+            return
+
+        # Panel header with separator
+        header = f"{BOX_H * 2} Activity Log {BOX_H * (w - 17)}"
+        self._safe_addstr(stdscr, panel_top, 0, header[:w-1], curses.color_pair(COLOR_DIVIDER))
+
+        # Get recent activity entries
+        entries = list(self.activity_feed)
+        visible_entries = entries[-(available_rows):]
+
+        # Color mapping for categories
+        cat_colors = {
+            "critical": COLOR_CRITICAL,
+            "error": COLOR_WARNING,
+            "warning": COLOR_WARNING,
+            "info": COLOR_NORMAL,
+            "debug": COLOR_DIM,
+            "engine": COLOR_RUNNING,
+            "recon": COLOR_ACCENT,
+            "credential": COLOR_CRITICAL,
+            "general": COLOR_NORMAL,
+        }
+
+        for i, entry in enumerate(visible_entries):
+            y = panel_top + 1 + i
+            if y >= panel_bottom:
+                break
+
+            ts = entry.get("timestamp", "")
+            msg = entry.get("message", "")
+            cat = entry.get("category", "general")
+            color = cat_colors.get(cat, COLOR_NORMAL)
+
+            # Format: [HH:MM:SS] message
+            line = f" {ts} {msg}"
+            self._safe_addstr(stdscr, y, 0, line[:w-1], curses.color_pair(color))
 
     def _draw_status_bar(self, stdscr, h, w):
         """Draw the status bar with color-coded segments and pulsing indicator."""
