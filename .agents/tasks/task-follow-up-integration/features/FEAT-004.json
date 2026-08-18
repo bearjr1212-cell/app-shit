@@ -1,0 +1,23 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Integrate wpa2.py and crypto modules into recon.py for enhanced security classification and handshake analysis. Also ensure all new modules (wpa2, ccmp, tkip) are consistently exported from __init__.py and have comprehensive documentation cross-references.",
+  "status": "completed",
+  "steps": [
+    "In posframework/recon.py: Add imports of wpa2.EAPOLKeyFrame, wpa2.HandshakeState (guarded). In the existing _identify_eapol_message method (or packet_handler), enhance handshake tracking by parsing captured EAPOL frames through EAPOLKeyFrame.parse() to extract nonces and key_info for richer database logging. Add a method _analyze_handshake_security(self, eapol_frames) that examines the key_info field from parsed frames to determine the key descriptor version (HMAC-MD5 vs HMAC-SHA1 vs AES-CMAC) and cipher suite, logging this alongside the handshake in the database. Store the cipher type (CCMP/TKIP) detected from the handshake in the database client record if available.",
+    "In posframework/recon.py: In the _handle_beacon/probe_response processing where RSN IE is parsed, add a log note when WPA3-SAE is detected indicating that the wpa3 subpackage can be used for downgrade testing. This is informational integration - connecting the recon findings to available attack tools.",
+    "Verify posframework/__init__.py already exports wpa2, ccmp, and tkip symbols correctly (it does based on earlier reading). Add any missing cross-module documentation strings in wpa2.py, ccmp.py, and tkip.py that reference how they connect to orchestrator.py, handshake.py, krack.py, attack_chain.py (add a 'Integration' section in module docstrings listing which modules use them).",
+    "Add tests in tests/test_recon_integration.py: Test that ReconEngine._analyze_handshake_security correctly identifies CCMP vs TKIP from synthetic EAPOL key_info. Test that EAPOLKeyFrame.parse works on realistic frame bytes (construct test data using known handshake structure)."
+  ],
+  "acceptance_criteria": [
+    "python -c 'from posframework.recon import ReconEngine' succeeds",
+    "python -c 'from posframework import WPA2Handshake, CCMPEngine, TKIPEngine' succeeds",
+    "python -m pytest tests/test_recon_integration.py passes all new tests",
+    "python -m pytest tests/ -q shows no new failures beyond pre-existing 4"
+  ],
+  "verification": [
+    "python -m pytest tests/ -q"
+  ],
+  "blocked_reason": null,
+  "findings": "All 22 new tests pass. Full suite: 452 passed, 4 failed (pre-existing pyyaml). WPA3-SAE beacon detection uses simplified check on classify_security output string containing 'WPA3'. The _analyze_handshake_security method works with and without native wpa2 module via fallback manual parsing."
+}

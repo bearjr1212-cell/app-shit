@@ -416,3 +416,160 @@ class TestImports:
         """PMKIDCapture has try_passwords method."""
         from posframework.pmkid import PMKIDCapture
         assert hasattr(PMKIDCapture, 'try_passwords')
+
+
+class TestExtractHandshakePair:
+    """Tests for the wpa2.extract_handshake_pair shared helper."""
+
+    def test_extract_valid_pair(self):
+        """extract_handshake_pair returns (msg1, msg2) for valid frames."""
+        from posframework.wpa2 import extract_handshake_pair
+
+        msg1, msg2 = _build_test_handshake_frames(
+            TEST_PASSPHRASE, TEST_SSID, TEST_AP_MAC, TEST_STA_MAC
+        )
+        result = extract_handshake_pair([msg1, msg2])
+        assert result is not None
+        msg1_frame, msg2_frame = result
+        assert msg1_frame.has_ack
+        assert not msg1_frame.has_mic
+        assert msg2_frame.has_mic
+        assert not msg2_frame.has_ack
+
+    def test_extract_returns_none_for_empty(self):
+        """extract_handshake_pair returns None for empty list."""
+        from posframework.wpa2 import extract_handshake_pair
+        assert extract_handshake_pair([]) is None
+
+    def test_extract_returns_none_for_only_msg1(self):
+        """extract_handshake_pair returns None with only Msg1."""
+        from posframework.wpa2 import extract_handshake_pair
+
+        msg1, _msg2 = _build_test_handshake_frames(
+            TEST_PASSPHRASE, TEST_SSID, TEST_AP_MAC, TEST_STA_MAC
+        )
+        assert extract_handshake_pair([msg1]) is None
+
+    def test_extract_returns_none_for_only_msg2(self):
+        """extract_handshake_pair returns None with only Msg2."""
+        from posframework.wpa2 import extract_handshake_pair
+
+        _msg1, msg2 = _build_test_handshake_frames(
+            TEST_PASSPHRASE, TEST_SSID, TEST_AP_MAC, TEST_STA_MAC
+        )
+        assert extract_handshake_pair([msg2]) is None
+
+    def test_extract_handles_tuples(self):
+        """extract_handshake_pair works with (bytes, metadata) tuples."""
+        from posframework.wpa2 import extract_handshake_pair
+
+        msg1, msg2 = _build_test_handshake_frames(
+            TEST_PASSPHRASE, TEST_SSID, TEST_AP_MAC, TEST_STA_MAC
+        )
+        # Wrap in tuples like cred_tester uses
+        frames = [(msg1, "00:13:ce:55:98:ef"), (msg2, "00:13:ce:55:98:ef")]
+        result = extract_handshake_pair(frames)
+        assert result is not None
+
+    def test_extract_ignores_invalid_frames(self):
+        """extract_handshake_pair skips unparseable data."""
+        from posframework.wpa2 import extract_handshake_pair
+
+        msg1, msg2 = _build_test_handshake_frames(
+            TEST_PASSPHRASE, TEST_SSID, TEST_AP_MAC, TEST_STA_MAC
+        )
+        # Include garbage data that won't parse
+        frames = [b'\x00' * 10, msg1, b'\xff' * 50, msg2]
+        result = extract_handshake_pair(frames)
+        assert result is not None
+
+
+class TestDetectCipherFromFrame:
+    """Tests for wpa2.detect_cipher_from_frame."""
+
+    def test_detect_ccmp(self):
+        """Key descriptor version 2 detects CCMP."""
+        from posframework.wpa2 import detect_cipher_from_frame, CipherSuite
+
+        frame = EAPOLKeyFrame()
+        # Version 2 = HMAC-SHA1 = CCMP
+        frame.key_info = KEY_INFO_TYPE_HMAC_SHA1 | KEY_INFO_PAIRWISE | KEY_INFO_MIC
+        assert detect_cipher_from_frame(frame) == CipherSuite.CCMP
+
+    def test_detect_tkip(self):
+        """Key descriptor version 1 detects TKIP."""
+        from posframework.wpa2 import detect_cipher_from_frame, CipherSuite
+
+        frame = EAPOLKeyFrame()
+        # Version 1 = HMAC-MD5 = TKIP
+        from posframework.wpa2 import KEY_INFO_TYPE_HMAC_MD5
+        frame.key_info = KEY_INFO_TYPE_HMAC_MD5 | KEY_INFO_PAIRWISE | KEY_INFO_MIC
+        assert detect_cipher_from_frame(frame) == CipherSuite.TKIP
+
+    def test_detect_defaults_to_ccmp(self):
+        """Unknown key descriptor version defaults to CCMP."""
+        from posframework.wpa2 import detect_cipher_from_frame, CipherSuite
+
+        frame = EAPOLKeyFrame()
+        # Version 3 = AES-CMAC, still uses CCMP-length PTK
+        frame.key_info = 0x0003 | KEY_INFO_PAIRWISE | KEY_INFO_MIC
+        assert detect_cipher_from_frame(frame) == CipherSuite.CCMP
+
+
+class TestTryPasswordsIterator:
+    """Tests for pmkid.try_passwords generator handling."""
+
+    def test_try_passwords_with_generator(self):
+        """try_passwords works correctly when passed a generator (not exhausted)."""
+        from unittest.mock import MagicMock, patch
+
+        capture = PMKIDCapture.__new__(PMKIDCapture)
+        capture._lock = __import__('threading').Lock()
+        capture._pmkids = {
+            ("aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"): {
+                "pmkid": "deadbeef" * 4,
+                "essid": "TestNet",
+            }
+        }
+
+        # Create a generator that would be exhausted by list()
+        def password_gen():
+            yield "wrong1"
+            yield "wrong2"
+
+        with patch.object(capture, 'verify_pmkid', return_value=False):
+            result = capture.try_passwords(
+                "11:22:33:44:55:66", password_gen(), "TestNet"
+            )
+
+        # Should return None (no match), but crucially should have
+        # iterated all passwords (not exhausted by len())
+        assert result is None
+
+    def test_try_passwords_finds_match_from_generator(self):
+        """try_passwords returns matching password from a generator."""
+        from unittest.mock import MagicMock, patch
+
+        capture = PMKIDCapture.__new__(PMKIDCapture)
+        capture._lock = __import__('threading').Lock()
+        capture._pmkids = {
+            ("aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"): {
+                "pmkid": "deadbeef" * 4,
+                "essid": "TestNet",
+            }
+        }
+
+        def password_gen():
+            yield "wrong"
+            yield "correct"
+            yield "extra"
+
+        def mock_verify(bssid, client_mac, password, ssid):
+            return password == "correct"
+
+        with patch.object(capture, 'verify_pmkid', side_effect=mock_verify):
+            result = capture.try_passwords(
+                "11:22:33:44:55:66", password_gen(), "TestNet"
+            )
+
+        assert result == "correct"

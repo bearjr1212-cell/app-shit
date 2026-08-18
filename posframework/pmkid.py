@@ -378,6 +378,9 @@ class PMKIDCapture:
             log.warning("WPA2 module not available, cannot try passwords")
             return None
 
+        # Materialize passwords once to avoid consuming a generator/iterator
+        passwords = list(passwords)
+
         bssid_lower = bssid.lower()
 
         # Find all client MACs with captured PMKIDs for this BSSID
@@ -392,7 +395,7 @@ class PMKIDCapture:
             return None
 
         log.info(
-            f"Testing {len(list(passwords))} passwords against "
+            f"Testing {len(passwords)} passwords against "
             f"{len(client_macs)} PMKIDs for {bssid}"
         )
 

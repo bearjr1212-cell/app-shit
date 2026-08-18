@@ -62,6 +62,8 @@ try:
         verify_eapol_mic as _wpa2_verify_eapol_mic,
         EAPOLKeyFrame as _WPA2EAPOLKeyFrame,
         CipherSuite as _WPA2CipherSuite,
+        detect_cipher_from_frame as _wpa2_detect_cipher,
+        extract_handshake_pair as _wpa2_extract_handshake_pair,
     )
     _HAS_WPA2 = True
 except ImportError:
@@ -836,33 +838,21 @@ class AutoPwnEngine:
             return False
 
         try:
-            # Parse frames to find Msg1 (ANonce) and Msg2 (SNonce + MIC)
-            msg1_frame = None
-            msg2_frame = None
-
-            for frame_data in handshake_frames:
-                parsed = _WPA2EAPOLKeyFrame.parse(frame_data)
-                if parsed is None:
-                    continue
-                if parsed.nonce == b'\x00' * 32:
-                    continue
-                # Msg1: has ACK, no MIC (AP sends ANonce)
-                if parsed.has_ack and not parsed.has_mic:
-                    msg1_frame = parsed
-                # Msg2: has MIC, no ACK, pairwise (STA sends SNonce)
-                elif parsed.has_mic and not parsed.has_ack and parsed.is_pairwise:
-                    msg2_frame = parsed
-
-            if msg1_frame is None or msg2_frame is None:
+            # Extract Msg1/Msg2 using shared helper
+            pair = _wpa2_extract_handshake_pair(handshake_frames)
+            if pair is None:
                 logger.debug(
                     "Incomplete handshake for native verification: "
-                    "msg1=%s, msg2=%s",
-                    msg1_frame is not None, msg2_frame is not None,
+                    "could not extract Msg1+Msg2 pair"
                 )
                 return False
 
+            msg1_frame, msg2_frame = pair
             anonce = msg1_frame.nonce
             snonce = msg2_frame.nonce
+
+            # Detect cipher suite from key descriptor version in Msg2
+            cipher_suite = _wpa2_detect_cipher(msg2_frame)
 
             # Derive PMK from password and SSID
             ssid = getattr(target, "ssid", "")
@@ -884,14 +874,14 @@ class AutoPwnEngine:
                 sta_mac.replace(":", "").replace("-", "")
             )
 
-            # Derive PTK
+            # Derive PTK using detected cipher suite
             ptk = _wpa2_derive_ptk(
                 pmk, ap_mac_bytes, sta_mac_bytes, anonce, snonce,
-                _WPA2CipherSuite.CCMP,
+                cipher_suite,
             )
 
             # Extract key hierarchy and verify MIC
-            keys = _wpa2_extract_key_hierarchy(ptk, _WPA2CipherSuite.CCMP)
+            keys = _wpa2_extract_key_hierarchy(ptk, cipher_suite)
             verified = _wpa2_verify_eapol_mic(keys.kck, msg2_frame)
 
             if verified:

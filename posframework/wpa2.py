@@ -247,6 +247,78 @@ class EAPOLKeyFrame:
         return bytes(frame)
 
 
+def detect_cipher_from_frame(frame: "EAPOLKeyFrame") -> "CipherSuite":
+    """
+    Detect the cipher suite from a parsed EAPOL-Key frame's key descriptor version.
+
+    Per IEEE 802.11-2020:
+      - Key descriptor version 1 = TKIP with HMAC-MD5 MIC
+      - Key descriptor version 2 = CCMP with HMAC-SHA1 MIC
+      - Key descriptor version 3 = AES-CMAC (WPA3/802.11w)
+
+    Falls back to CCMP if the version is unrecognized.
+
+    Args:
+        frame: A parsed EAPOLKeyFrame instance.
+
+    Returns:
+        CipherSuite.TKIP or CipherSuite.CCMP.
+    """
+    version = frame.key_descriptor_version
+    if version == KEY_INFO_TYPE_HMAC_MD5:
+        return CipherSuite.TKIP
+    # Version 2 (HMAC-SHA1) and version 3 (AES-CMAC) both use CCMP-length PTK
+    return CipherSuite.CCMP
+
+
+def extract_handshake_pair(
+    frames,
+) -> Optional[Tuple["EAPOLKeyFrame", "EAPOLKeyFrame"]]:
+    """
+    Extract Msg1 (AP ANonce) and Msg2 (STA SNonce + MIC) from a list of EAPOL frames.
+
+    Parses each item in frames through EAPOLKeyFrame.parse(). Supports both
+    raw bytes and (raw_bytes, metadata) tuples.
+
+    Identification heuristics:
+      - Msg1: has_ack=True, has_mic=False, nonce != all-zeros (AP sends ANonce)
+      - Msg2: has_mic=True, has_ack=False, is_pairwise=True (STA sends SNonce)
+
+    Args:
+        frames: Iterable of raw EAPOL frame bytes, or tuples where
+                the first element is raw bytes.
+
+    Returns:
+        (msg1_frame, msg2_frame) tuple, or None if either cannot be found.
+    """
+    msg1_frame = None
+    msg2_frame = None
+
+    for item in frames:
+        # Support both plain bytes and (raw_bytes, sta_mac) tuples
+        if isinstance(item, tuple):
+            raw_frame = item[0]
+        else:
+            raw_frame = item
+
+        parsed = EAPOLKeyFrame.parse(raw_frame)
+        if parsed is None:
+            continue
+        if parsed.nonce == b'\x00' * 32:
+            continue
+        # Msg1: has ACK, no MIC (AP sends ANonce)
+        if parsed.has_ack and not parsed.has_mic:
+            msg1_frame = parsed
+        # Msg2: has MIC, no ACK, pairwise (STA sends SNonce)
+        elif parsed.has_mic and not parsed.has_ack and parsed.is_pairwise:
+            msg2_frame = parsed
+
+    if msg1_frame is None or msg2_frame is None:
+        return None
+
+    return (msg1_frame, msg2_frame)
+
+
 @dataclass
 class DerivedKeys:
     """Complete derived key material from WPA2 handshake."""

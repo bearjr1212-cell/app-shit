@@ -40,6 +40,8 @@ try:
         compute_eapol_mic as wpa2_compute_eapol_mic,
         EAPOLKeyFrame as WPA2EAPOLKeyFrame,
         CipherSuite as WPA2CipherSuite,
+        detect_cipher_from_frame as wpa2_detect_cipher,
+        extract_handshake_pair as wpa2_extract_handshake_pair,
     )
     _HAS_WPA2 = True
 except ImportError:
@@ -639,26 +641,18 @@ class AttackOrchestrator:
             return False
 
         try:
-            # Parse frames to find Msg1 (has ANonce, ACK set, no MIC)
-            # and Msg2 (has SNonce, MIC set, no ACK)
-            msg1_frame = None
-            msg2_frame = None
-
-            for raw_frame in handshake_frames:
-                parsed = WPA2EAPOLKeyFrame.parse(raw_frame)
-                if parsed is None:
-                    continue
-                if parsed.has_ack and not parsed.has_mic:
-                    msg1_frame = parsed
-                elif parsed.has_mic and not parsed.has_ack and parsed.is_pairwise:
-                    msg2_frame = parsed
-
-            if msg1_frame is None or msg2_frame is None:
+            # Extract Msg1/Msg2 using shared helper
+            pair = wpa2_extract_handshake_pair(handshake_frames)
+            if pair is None:
                 log.warning("Could not identify Msg1 and Msg2 in handshake frames")
                 return False
 
+            msg1_frame, msg2_frame = pair
             anonce = msg1_frame.nonce
             snonce = msg2_frame.nonce
+
+            # Detect cipher suite from key descriptor version in Msg2
+            cipher_suite = wpa2_detect_cipher(msg2_frame)
 
             # Derive PMK from password and SSID
             pmk = wpa2_derive_pmk(password, ssid)
@@ -683,12 +677,12 @@ class AttackOrchestrator:
                 log.warning("No STA MAC available for PTK derivation")
                 return False
 
-            # Derive PTK
+            # Derive PTK using detected cipher suite
             ptk = wpa2_derive_ptk(pmk, ap_mac, sta_mac, anonce, snonce,
-                                  WPA2CipherSuite.CCMP)
+                                  cipher_suite)
 
             # Extract KCK from PTK
-            keys = wpa2_extract_key_hierarchy(ptk, WPA2CipherSuite.CCMP)
+            keys = wpa2_extract_key_hierarchy(ptk, cipher_suite)
 
             # Verify MIC on Msg2
             result = wpa2_verify_eapol_mic(keys.kck, msg2_frame)
@@ -792,6 +786,15 @@ class AttackOrchestrator:
                             pcap_file = self.handshakes.export_pcap(client_mac, bssid)
                             if pcap_file and self.test_credentials:
                                 log.info(f"Handshake saved to {pcap_file} - ready for hashcat")
+                            # Verify handshake using crypto if credentials are known
+                            if _HAS_WPA2:
+                                raw_frames = self.handshakes.get_raw_frames(
+                                    client_mac, bssid
+                                ) if hasattr(self.handshakes, 'get_raw_frames') else []
+                                if raw_frames:
+                                    self._verify_handshake_crypto(
+                                        client_mac, bssid, raw_frames
+                                    )
                             # Auto-feed to hashcat if enabled
                             if pcap_file and self.hashcat and self.hashcat_wordlist:
                                 self.hashcat.start_crack(pcap_file, self.hashcat_wordlist)

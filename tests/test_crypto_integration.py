@@ -273,13 +273,13 @@ class TestNativeDecryptionEngine:
             cipher='ccmp'
         )
 
-        cache_key = (TEST_AP_MAC, TEST_STA_MAC)
+        cache_key = (TEST_AP_MAC, TEST_STA_MAC, TEST_ANONCE, TEST_SNONCE)
         assert cache_key in engine._ptk_cache
 
     def test_clear_cache(self):
         """clear_cache removes all cached PTKs."""
         engine = NativeDecryptionEngine()
-        engine._ptk_cache[(b'\x01' * 6, b'\x02' * 6)] = b'\x00' * 48
+        engine._ptk_cache[(b'\x01' * 6, b'\x02' * 6, b'\x03' * 32, b'\x04' * 32)] = b'\x00' * 48
         engine.clear_cache()
         assert len(engine._ptk_cache) == 0
 

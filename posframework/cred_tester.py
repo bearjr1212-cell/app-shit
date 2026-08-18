@@ -30,6 +30,8 @@ try:
         verify_eapol_mic as wpa2_verify_eapol_mic,
         EAPOLKeyFrame as WPA2EAPOLKeyFrame,
         CipherSuite as WPA2CipherSuite,
+        detect_cipher_from_frame as wpa2_detect_cipher,
+        extract_handshake_pair as wpa2_extract_handshake_pair,
     )
     _HAS_WPA2 = True
 except ImportError:
@@ -73,42 +75,33 @@ class CredentialTester:
 
         Returns:
             True if password is correct (MIC verification passes).
+            False if the password is incorrect.
+            None if verification is not applicable (WPA2 module unavailable,
+                insufficient frames, or missing STA MAC). A None return
+                signals the caller to use the fallback path (e.g.,
+                wpa_supplicant subprocess).
         """
         if not _HAS_WPA2:
             log.debug("WPA2 module unavailable, cannot do native password test")
-            return None  # None means not applicable, fall through
+            return None  # None means not applicable, use fallback
 
         if not handshake_frames or len(handshake_frames) < 2:
             log.debug("Native test requires at least 2 handshake frames")
             return None
 
         try:
-            # Parse frames to identify Msg1 and Msg2
-            msg1_frame = None
-            msg2_frame = None
-
-            for item in handshake_frames:
-                # Support both plain bytes and (raw_bytes, sta_mac) tuples
-                if isinstance(item, tuple):
-                    raw_frame = item[0]
-                else:
-                    raw_frame = item
-                parsed = WPA2EAPOLKeyFrame.parse(raw_frame)
-                if parsed is None:
-                    continue
-                # Msg1: ACK set, no MIC
-                if parsed.has_ack and not parsed.has_mic:
-                    msg1_frame = parsed
-                # Msg2: MIC set, no ACK, pairwise
-                elif parsed.has_mic and not parsed.has_ack and parsed.is_pairwise:
-                    msg2_frame = parsed
-
-            if msg1_frame is None or msg2_frame is None:
+            # Extract Msg1/Msg2 using shared helper
+            pair = wpa2_extract_handshake_pair(handshake_frames)
+            if pair is None:
                 log.debug("Could not find Msg1+Msg2 in provided frames")
                 return None
 
+            msg1_frame, msg2_frame = pair
             anonce = msg1_frame.nonce
             snonce = msg2_frame.nonce
+
+            # Detect cipher suite from key descriptor version in Msg2
+            cipher_suite = wpa2_detect_cipher(msg2_frame)
 
             # Convert BSSID string to bytes
             ap_mac = bytes.fromhex(bssid.replace(":", "").replace("-", ""))
@@ -133,12 +126,12 @@ class CredentialTester:
             # Derive PMK
             pmk = wpa2_derive_pmk(password, ssid)
 
-            # Derive PTK
+            # Derive PTK using detected cipher suite
             ptk = wpa2_derive_ptk(pmk, ap_mac, sta_mac, anonce, snonce,
-                                  WPA2CipherSuite.CCMP)
+                                  cipher_suite)
 
             # Extract keys
-            keys = wpa2_extract_key_hierarchy(ptk, WPA2CipherSuite.CCMP)
+            keys = wpa2_extract_key_hierarchy(ptk, cipher_suite)
 
             # Verify MIC on Msg2
             result = wpa2_verify_eapol_mic(keys.kck, msg2_frame)

@@ -426,6 +426,7 @@ try:
         WPA2Handshake, HandshakeRole, HandshakeState, CipherSuite,
         EAPOLKeyFrame, DerivedKeys, derive_pmk, derive_ptk,
         extract_key_hierarchy, compute_eapol_mic, verify_eapol_mic,
+        detect_cipher_from_frame, extract_handshake_pair,
     )
 except ImportError:
     WPA2Handshake = None
@@ -439,6 +440,8 @@ except ImportError:
     extract_key_hierarchy = None
     compute_eapol_mic = None
     verify_eapol_mic = None
+    detect_cipher_from_frame = None
+    extract_handshake_pair = None
 
 # Subpackage re-exports for convenience
 try:

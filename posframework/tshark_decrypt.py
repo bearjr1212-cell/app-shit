@@ -37,7 +37,10 @@ except ImportError:
     _HAS_TKIP = False
 
 try:
-    from .wpa2 import derive_pmk, derive_ptk, extract_key_hierarchy, CipherSuite
+    from .wpa2 import (
+        derive_pmk, derive_ptk, extract_key_hierarchy, CipherSuite,
+        detect_cipher_from_frame, extract_handshake_pair,
+    )
     _HAS_WPA2 = True
 except ImportError:
     _HAS_WPA2 = False
@@ -440,6 +443,14 @@ class LiveDecryptionSession:
         """
         tshark_path = self._engine._get_tshark_path()
         if not tshark_path:
+            # If native fallback is configured, use it instead of tshark
+            if self._native_fallback_enabled and self._native_engine:
+                log.info(
+                    "tshark not found - using native decryption fallback"
+                )
+                self._running = True
+                self._start_time = time.time()
+                return True
             log.warning("tshark not found - live decryption unavailable")
             return False
 
@@ -771,7 +782,7 @@ class NativeDecryptionEngine:
 
     def __init__(self):
         """Initialize native decryption engine."""
-        self._ptk_cache: Dict[Tuple[bytes, bytes], bytes] = {}
+        self._ptk_cache: Dict[Tuple[bytes, bytes, bytes, bytes], bytes] = {}
 
     @staticmethod
     def is_available() -> bool:
@@ -830,8 +841,8 @@ class NativeDecryptionEngine:
         Returns:
             Decrypted plaintext or None on failure.
         """
-        # Check for cached PTK
-        cache_key = (ap_mac, sta_mac)
+        # Check for cached PTK (keyed on MAC pair + nonces to avoid stale keys after rekeying)
+        cache_key = (ap_mac, sta_mac, anonce, snonce)
         ptk = self._ptk_cache.get(cache_key)
 
         if ptk is None:
