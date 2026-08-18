@@ -288,8 +288,8 @@ def main():
         if orchestrator:
             orchestrator.stop()
         elif scanner:
+            scanner.running = False
             scanner.stop()
-            scanner.db.close()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)

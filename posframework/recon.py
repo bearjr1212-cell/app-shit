@@ -169,6 +169,59 @@ class ReconEngine:
         except (subprocess.TimeoutExpired, OSError):
             pass
 
+    def _filter_supported_channels(self):
+        """Query the adapter for supported channels and filter the channel list."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["iw", "phy", "phy0", "channels"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode != 0:
+                # Try alternative: iw dev <iface> info to get phy, then query
+                result = subprocess.run(
+                    ["iw", "dev", self.interface, "info"],
+                    capture_output=True, text=True, timeout=5
+                )
+                phy = None
+                if result.returncode == 0:
+                    for line in result.stdout.splitlines():
+                        if "wiphy" in line:
+                            phy_num = line.strip().split()[-1]
+                            phy = f"phy{phy_num}"
+                            break
+                if phy:
+                    result = subprocess.run(
+                        ["iw", "phy", phy, "channels"],
+                        capture_output=True, text=True, timeout=5
+                    )
+
+            if result.returncode == 0 and result.stdout:
+                import re
+                supported = set()
+                for line in result.stdout.splitlines():
+                    # Match lines like "* 2412 MHz [1]" or "Channel 1"
+                    m = re.search(r'\[(\d+)\]', line)
+                    if m:
+                        ch = int(m.group(1))
+                        # Skip disabled channels
+                        if 'disabled' not in line.lower() and 'no IR' not in line:
+                            supported.add(ch)
+                if supported:
+                    original_len = len(self.channels)
+                    self.channels = [ch for ch in self.channels if ch in supported]
+                    if len(self.channels) < original_len:
+                        removed = original_len - len(self.channels)
+                        log.info(f"Filtered {removed} unsupported channels. Using: {self.channels}")
+                    if not self.channels:
+                        # Fallback to standard 1-11
+                        self.channels = list(range(1, 12))
+                        log.warning("No channels detected, defaulting to 1-11")
+        except Exception as e:
+            # If we can't query, just use 1-11 as safe default
+            log.debug(f"Channel query failed ({e}), filtering to 1-11")
+            self.channels = [ch for ch in self.channels if ch <= 11]
+
     def _hop_channels(self):
         idx = 0
         while self.running:
@@ -577,6 +630,8 @@ class ReconEngine:
         
         log.info(f"Recon active on {self.interface} | Channels: {self.channels}")
         if self.channel_hop:
+            # Filter channels to only those the adapter supports
+            self._filter_supported_channels()
             threading.Thread(target=self._hop_channels, daemon=True).start()
         threading.Thread(target=self._status_loop, daemon=True).start()
         try:
@@ -586,8 +641,13 @@ class ReconEngine:
             else:
                 log.info("Using scapy for packet capture")
                 sniff(iface=self.interface, prn=self.packet_handler, store=0, timeout=timeout)
+        except SystemExit:
+            pass
         finally:
-            self.db.flush()
+            try:
+                self.db.flush()
+            except Exception:
+                pass
 
     def _try_tshark_capture(self, timeout):
         """Attempt to use tshark for capture, return True if successful."""
