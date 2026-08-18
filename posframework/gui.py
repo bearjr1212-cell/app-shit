@@ -28,6 +28,7 @@ import threading
 import logging
 import asyncio
 import json
+from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -835,6 +836,21 @@ class TerminalUI:
         # Intercepted traffic for MITM tab
         self.intercepted_traffic: List[Dict] = []
 
+        # Notification system
+        self.notifications: List[Dict] = []
+        self._last_cred_count = 0
+
+        # Activity feed
+        self.activity_feed: deque = deque(maxlen=50)
+
+        # Help overlay
+        self.show_help = False
+
+        # Confirmation dialog state
+        self._confirm_active = False
+        self._confirm_message = ""
+        self._confirm_callback = None
+
     def _init_infrastructure(self):
         """Initialize infrastructure modules."""
         if ConfigLoader is not None:
@@ -1186,6 +1202,260 @@ class TerminalUI:
             pass
 
     # ================================================================
+    # NOTIFICATION SYSTEM
+    # ================================================================
+
+    def _add_notification(self, message: str, level: str = "info"):
+        """Add a notification to the notification queue.
+
+        Args:
+            message: Notification text.
+            level: One of 'info', 'warning', 'critical'.
+        """
+        notification = {
+            "message": message,
+            "level": level,
+            "timestamp": time.time(),
+            "seen": False,
+        }
+        self.notifications.append(notification)
+        # Keep max 20 notifications
+        if len(self.notifications) > 20:
+            self.notifications = self.notifications[-20:]
+
+    def _draw_notifications(self, stdscr, h, w):
+        """Draw the most recent unseen notification as a badge in the header area."""
+        unseen = [n for n in self.notifications if not n["seen"]]
+        if not unseen:
+            return
+
+        # Show notification count badge on the right side of row 0
+        badge_str = f" {CIRCLE_FILLED} {len(unseen)} "
+        badge_x = w - len(badge_str) - 12  # Before the time display
+        if badge_x < 30:
+            return
+
+        # Color based on highest severity
+        has_critical = any(n["level"] == "critical" for n in unseen)
+        has_warning = any(n["level"] == "warning" for n in unseen)
+        if has_critical:
+            attr = curses.color_pair(COLOR_CRITICAL) | curses.A_BOLD
+            if int(time.time()) % 2 == 0:
+                attr |= curses.A_BLINK
+        elif has_warning:
+            attr = curses.color_pair(COLOR_WARNING) | curses.A_BOLD
+        else:
+            attr = curses.color_pair(COLOR_SUCCESS) | curses.A_BOLD
+
+        self._safe_addstr(stdscr, 0, badge_x, badge_str, attr)
+
+        # Show the latest notification text below tabs
+        latest = unseen[-1]
+        # Auto-mark as seen after 5 seconds
+        if time.time() - latest["timestamp"] > 5:
+            latest["seen"] = True
+            return
+
+        icon = {
+            "info": CIRCLE_FILLED,
+            "warning": ARROW_RIGHT,
+            "critical": CROSS_MARK,
+        }.get(latest["level"], BULLET)
+
+        notif_str = f" {icon} {latest['message']}"
+        notif_attr = attr
+        # Draw on the separator line (row 2) if space allows
+        if len(notif_str) < w - 4:
+            self._safe_addstr(stdscr, 2, w - len(notif_str) - 2, notif_str[:w-4], notif_attr)
+
+    # ================================================================
+    # ACTIVITY FEED
+    # ================================================================
+
+    def _log_activity(self, message: str, category: str = "general"):
+        """Log an activity to the activity feed.
+
+        Args:
+            message: Activity description.
+            category: Category tag (engine, recon, export, target, etc.).
+        """
+        entry = {
+            "message": message,
+            "category": category,
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+        }
+        self.activity_feed.append(entry)
+
+    # ================================================================
+    # HELP OVERLAY
+    # ================================================================
+
+    def _draw_help_overlay(self, stdscr, h, w):
+        """Draw a centered help overlay showing all keyboard shortcuts."""
+        # Calculate overlay dimensions (80% of screen)
+        overlay_h = max(20, int(h * 0.8))
+        overlay_w = max(50, int(w * 0.8))
+        start_y = max(1, (h - overlay_h) // 2)
+        start_x = max(1, (w - overlay_w) // 2)
+
+        # Clamp to screen bounds
+        overlay_h = min(overlay_h, h - start_y - 1)
+        overlay_w = min(overlay_w, w - start_x - 1)
+
+        if overlay_h < 10 or overlay_w < 30:
+            return
+
+        # Draw shadow
+        for sy in range(start_y + 1, start_y + overlay_h + 1):
+            if sy < h:
+                self._safe_addstr(stdscr, sy, start_x + overlay_w, " ", curses.A_DIM)
+        if start_y + overlay_h < h:
+            self._safe_addstr(stdscr, start_y + overlay_h, start_x + 1,
+                              " " * min(overlay_w, w - start_x - 2), curses.A_DIM)
+
+        # Draw double-line border
+        self._safe_addstr(stdscr, start_y, start_x,
+                          DOUBLE_BOX_TL + DOUBLE_BOX_H * (overlay_w - 2) + DOUBLE_BOX_TR,
+                          curses.color_pair(COLOR_HEADER))
+        for i in range(1, overlay_h - 1):
+            self._safe_addstr(stdscr, start_y + i, start_x, DOUBLE_BOX_V, curses.color_pair(COLOR_HEADER))
+            self._safe_addstr(stdscr, start_y + i, start_x + 1, " " * (overlay_w - 2))
+            self._safe_addstr(stdscr, start_y + i, start_x + overlay_w - 1, DOUBLE_BOX_V, curses.color_pair(COLOR_HEADER))
+        self._safe_addstr(stdscr, start_y + overlay_h - 1, start_x,
+                          DOUBLE_BOX_BL + DOUBLE_BOX_H * (overlay_w - 2) + DOUBLE_BOX_BR,
+                          curses.color_pair(COLOR_HEADER))
+
+        # Title
+        title = " Keyboard Shortcuts "
+        title_x = start_x + (overlay_w - len(title)) // 2
+        self._safe_addstr(stdscr, start_y, title_x, title,
+                          curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+
+        # Content
+        cx = start_x + 3
+        cy = start_y + 2
+        max_line_w = overlay_w - 6
+
+        sections = [
+            ("Navigation", [
+                ("Tab / Shift+Tab", "Next / Previous tab"),
+                ("1-9", "Jump to tab by number"),
+                ("Up / Down", "Navigate items"),
+                ("PgUp / PgDn", "Scroll by page"),
+                ("Space", "Toggle view (Targets) / Toggle setting"),
+            ]),
+            ("Actions", [
+                ("Enter", "Execute action / Toggle engine"),
+                ("s", "Cycle sort mode (Targets)"),
+                ("r", "Start recon (Targets) / Refresh"),
+                ("x", "Stop recon"),
+                ("a", "AutoPwn toggle / Stop recon & attack"),
+                ("e", "Export current data"),
+                ("f or /", "Filter / Search"),
+            ]),
+            ("Display", [
+                ("?", "Toggle this help overlay"),
+                ("q / Q", "Quit application"),
+            ]),
+            ("Tabs Overview", [
+                ("1: Targets", "AP/Client discovery and selection"),
+                ("2: WiFi Attacks", "Deauth, beacon, KARMA, WPA3"),
+                ("3: Cred Attacks", "Credential harvesting modules"),
+                ("4: MITM", "ARP poison, SSL strip, DNS spoof"),
+                ("5: Network", "VLAN, mapper, pivot, printers"),
+                ("6: BLE/SDR", "Bluetooth & software-defined radio"),
+                ("7: Harvester", "Live tshark decrypt + pyWhat"),
+                ("8: Cracking", "Hashcat & John integration"),
+                ("9: Settings", "Configuration & module status"),
+            ]),
+        ]
+
+        for section_title, shortcuts in sections:
+            if cy >= start_y + overlay_h - 2:
+                break
+            # Section header
+            self._safe_addstr(stdscr, cy, cx, section_title,
+                              curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
+            cy += 1
+            for key, desc in shortcuts:
+                if cy >= start_y + overlay_h - 2:
+                    break
+                line = f"  {key:<20s} {desc}"
+                self._safe_addstr(stdscr, cy, cx, line[:max_line_w],
+                                  curses.color_pair(COLOR_NORMAL))
+                cy += 1
+            cy += 1  # Gap between sections
+
+        # Footer hint
+        footer = " Press ? or Esc to close "
+        footer_x = start_x + (overlay_w - len(footer)) // 2
+        if start_y + overlay_h - 1 < h:
+            self._safe_addstr(stdscr, start_y + overlay_h - 1, footer_x, footer,
+                              curses.color_pair(COLOR_DIM))
+
+    # ================================================================
+    # CONFIRMATION DIALOG
+    # ================================================================
+
+    def _show_confirm(self, message: str, on_confirm):
+        """Show a confirmation dialog for destructive actions.
+
+        Args:
+            message: The confirmation prompt text.
+            on_confirm: Callback to execute if user confirms (Y).
+        """
+        self._confirm_active = True
+        self._confirm_message = message
+        self._confirm_callback = on_confirm
+
+    def _draw_confirm_dialog(self, stdscr, h, w):
+        """Render the confirmation dialog popup."""
+        if not self._confirm_active:
+            return
+
+        msg = self._confirm_message
+        popup_w = min(max(len(msg) + 8, 30), w - 4)
+        popup_h = 5
+        start_y = max(2, (h - popup_h) // 2)
+        start_x = max(2, (w - popup_w) // 2)
+
+        # Shadow
+        for sy in range(start_y + 1, start_y + popup_h + 1):
+            if sy < h:
+                self._safe_addstr(stdscr, sy, start_x + popup_w, " ", curses.A_DIM)
+        if start_y + popup_h < h:
+            self._safe_addstr(stdscr, start_y + popup_h, start_x + 1,
+                              " " * min(popup_w, w - start_x - 2), curses.A_DIM)
+
+        # Double-line border
+        self._safe_addstr(stdscr, start_y, start_x,
+                          DOUBLE_BOX_TL + DOUBLE_BOX_H * (popup_w - 2) + DOUBLE_BOX_TR,
+                          curses.color_pair(COLOR_WARNING))
+        for i in range(1, popup_h - 1):
+            self._safe_addstr(stdscr, start_y + i, start_x, DOUBLE_BOX_V, curses.color_pair(COLOR_WARNING))
+            self._safe_addstr(stdscr, start_y + i, start_x + 1, " " * (popup_w - 2))
+            self._safe_addstr(stdscr, start_y + i, start_x + popup_w - 1, DOUBLE_BOX_V, curses.color_pair(COLOR_WARNING))
+        self._safe_addstr(stdscr, start_y + popup_h - 1, start_x,
+                          DOUBLE_BOX_BL + DOUBLE_BOX_H * (popup_w - 2) + DOUBLE_BOX_BR,
+                          curses.color_pair(COLOR_WARNING))
+
+        # Title
+        title = " Confirm "
+        title_x = start_x + (popup_w - len(title)) // 2
+        self._safe_addstr(stdscr, start_y, title_x, title,
+                          curses.color_pair(COLOR_WARNING) | curses.A_BOLD)
+
+        # Message
+        self._safe_addstr(stdscr, start_y + 1, start_x + 2, msg[:popup_w - 4],
+                          curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+
+        # Options
+        options_str = "[Y] Yes    [N] No"
+        opt_x = start_x + (popup_w - len(options_str)) // 2
+        self._safe_addstr(stdscr, start_y + 3, opt_x, options_str,
+                          curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
+
+    # ================================================================
     # MAIN DRAW
     # ================================================================
 
@@ -1208,14 +1478,41 @@ class TerminalUI:
         self._draw_status_bar(stdscr, h, w)
         # Draw help bar
         self._draw_help_bar(stdscr, h, w)
+        # Draw notifications badge/toast
+        self._draw_notifications(stdscr, h, w)
         # Draw popup if active
         if self.show_popup:
             self._draw_popup(stdscr, h, w)
         # Draw input mode if active
         if self.input_mode:
             self._draw_input(stdscr, h, w)
+        # Draw confirmation dialog if active
+        if self._confirm_active:
+            self._draw_confirm_dialog(stdscr, h, w)
+        # Draw help overlay on top of everything
+        if self.show_help:
+            self._draw_help_overlay(stdscr, h, w)
+
+        # Check for credential count changes (trigger notifications)
+        self._check_credential_notifications()
 
         stdscr.refresh()
+
+    def _check_credential_notifications(self):
+        """Check for credential count changes and trigger notifications."""
+        try:
+            current_creds = self._get_credentials_count()
+            if current_creds > self._last_cred_count and self._last_cred_count > 0:
+                new_count = current_creds - self._last_cred_count
+                self._add_notification(
+                    f"New credentials captured! (+{new_count})", "critical"
+                )
+                self._log_activity(
+                    f"Discovered {new_count} new credential(s)", "credential"
+                )
+            self._last_cred_count = current_creds
+        except Exception:
+            pass
 
     def _draw_header(self, stdscr, w):
         """Draw the header banner with version, subtitle, and time."""
@@ -1368,13 +1665,13 @@ class TerminalUI:
         y = h - 1
         tab = TABS[self.active_tab]
         if tab == "Targets":
-            keys = [("Q", "Quit"), ("Tab", "Switch"), ("s", "Sort"), ("Enter", "Attack"), ("Space", "Toggle"), ("\u2191\u2193", "Nav"), ("a", "AutoPwn"), ("r", "Refresh")]
+            keys = [("Q", "Quit"), ("Tab", "Switch"), ("s", "Sort"), ("Enter", "Attack"), ("Space", "Toggle"), ("\u2191\u2193", "Nav"), ("a", "AutoPwn"), ("r", "Refresh"), ("?", "Help")]
         elif tab == "Harvester":
-            keys = [("Q", "Quit"), ("Tab", "Switch"), ("Enter", "Start/Stop"), ("Space", "Config"), ("e", "Export"), ("r", "Refresh")]
+            keys = [("Q", "Quit"), ("Tab", "Switch"), ("Enter", "Start/Stop"), ("Space", "Config"), ("e", "Export"), ("r", "Refresh"), ("?", "Help")]
         elif tab == "Cracking":
-            keys = [("Q", "Quit"), ("Tab", "Switch"), ("Enter", "Start/Stop"), ("Space", "Mode"), ("\u2191\u2193", "Nav")]
+            keys = [("Q", "Quit"), ("Tab", "Switch"), ("Enter", "Start/Stop"), ("Space", "Mode"), ("\u2191\u2193", "Nav"), ("?", "Help")]
         else:
-            keys = [("Q", "Quit"), ("Tab", "Switch"), ("Enter", "Action"), ("Space", "Toggle"), ("\u2191\u2193", "Nav"), ("a", "AutoPwn"), ("e", "Export"), ("r", "Refresh")]
+            keys = [("Q", "Quit"), ("Tab", "Switch"), ("Enter", "Action"), ("Space", "Toggle"), ("\u2191\u2193", "Nav"), ("a", "AutoPwn"), ("e", "Export"), ("?", "Help")]
 
         x_pos = 1
         for key, desc in keys:
@@ -1396,6 +1693,29 @@ class TerminalUI:
     def _draw_targets_tab(self, stdscr, h, w):
         """Draw the Targets tab with sortable AP and client tables."""
         start_y = 3
+
+        # Dashboard summary panel
+        aps = self._get_access_points()
+        clients = self._get_clients()
+        creds = self._get_credentials_count()
+        running_count = sum(1 for e in self.wifi_attacks.values() if e.is_running)
+        running_count += sum(1 for e in self.cred_attacks.values() if e.is_running)
+        running_count += sum(1 for e in self.mitm_attacks.values() if e.is_running)
+        running_count += sum(1 for e in self.network_modules.values() if e.is_running)
+        running_count += sum(1 for e in self.ble_sdr_modules.values() if e.is_running)
+
+        recon_label = f"{CIRCLE_FILLED} Active" if self.recon_running else f"{CIRCLE_EMPTY} Idle"
+        autopwn_label = f"{CIRCLE_FILLED} {self.autopwn_state}" if self.autopwn_running else f"{CIRCLE_EMPTY} Off"
+
+        dash_line = (
+            f" APs: {len(aps)} {BOX_V} Clients: {len(clients)} {BOX_V} "
+            f"Creds: {creds} {BOX_V} Engines: {running_count} {BOX_V} "
+            f"Recon: {recon_label} {BOX_V} AutoPwn: {autopwn_label}"
+        )
+        self._safe_addstr(stdscr, start_y, 1, dash_line[:w-2],
+                          curses.color_pair(COLOR_GRADIENT) | curses.A_BOLD)
+        start_y += 1
+
         # Header using section header
         sort_name = SORT_MODES[self.sort_mode]
         view_label = "Access Points" if self.target_view == "ap" else "Clients"
@@ -1496,6 +1816,15 @@ class TerminalUI:
     # WIFI ATTACKS TAB
     # ================================================================
 
+    def _format_engine_uptime(self, engine) -> str:
+        """Format engine uptime as Xm Xs if running."""
+        if engine.is_running and engine.start_time:
+            elapsed = time.time() - engine.start_time
+            minutes = int(elapsed // 60)
+            seconds = int(elapsed % 60)
+            return f" {minutes}m {seconds}s"
+        return ""
+
     def _draw_wifi_attacks_tab(self, stdscr, h, w):
         """Draw WiFi Attacks tab with all attack modules."""
         start_y = 3
@@ -1519,8 +1848,9 @@ class TerminalUI:
                 break
 
             # Status indicator with Unicode circles
+            uptime_str = self._format_engine_uptime(engine)
             if engine.is_running:
-                status = f"{CIRCLE_FILLED} RUNNING"
+                status = f"{CIRCLE_FILLED} RUNNING{uptime_str}"
                 status_color = curses.color_pair(COLOR_RUNNING)
             elif engine.status == EngineStatus.FAILED:
                 status = f"{CROSS_MARK} FAILED"
@@ -1571,8 +1901,9 @@ class TerminalUI:
             if row_y >= h - 3:
                 break
 
+            uptime_str = self._format_engine_uptime(engine)
             if engine.is_running:
-                status = f"{CIRCLE_FILLED} RUNNING"
+                status = f"{CIRCLE_FILLED} RUNNING{uptime_str}"
                 status_color = curses.color_pair(COLOR_RUNNING)
             elif engine.status == EngineStatus.FAILED:
                 status = f"{CROSS_MARK} FAILED"
@@ -1621,8 +1952,9 @@ class TerminalUI:
             if row_y >= h - 3:
                 break
 
+            uptime_str = self._format_engine_uptime(engine)
             if engine.is_running:
-                status = f"{CIRCLE_FILLED} RUNNING"
+                status = f"{CIRCLE_FILLED} RUNNING{uptime_str}"
                 status_color = curses.color_pair(COLOR_RUNNING)
             elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
                 status = f"{CIRCLE_DOT} SAVED"
@@ -1681,8 +2013,9 @@ class TerminalUI:
             if row_y >= h - 3:
                 break
 
+            uptime_str = self._format_engine_uptime(engine)
             if engine.is_running:
-                status = f"{CIRCLE_FILLED} RUNNING"
+                status = f"{CIRCLE_FILLED} RUNNING{uptime_str}"
                 status_color = curses.color_pair(COLOR_RUNNING)
             elif engine.status == EngineStatus.FAILED:
                 status = f"{CROSS_MARK} FAILED"
@@ -1725,8 +2058,9 @@ class TerminalUI:
             if row_y >= h - 3:
                 break
 
+            uptime_str = self._format_engine_uptime(engine)
             if engine.is_running:
-                status = f"{CIRCLE_FILLED} RUNNING"
+                status = f"{CIRCLE_FILLED} RUNNING{uptime_str}"
                 status_color = curses.color_pair(COLOR_RUNNING)
             elif engine.status == EngineStatus.FAILED:
                 status = f"{CROSS_MARK} FAILED"
@@ -1850,13 +2184,11 @@ class TerminalUI:
     def _draw_cracking_tab(self, stdscr, h, w):
         """Draw Cracking tab with hashcat/john integration."""
         start_y = 3
-        title = " Password Cracking (Hashcat / John the Ripper)"
-        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+        self._draw_section_header(stdscr, start_y, 1, w - 2, "Password Cracking (Hashcat / John the Ripper)", COLOR_HEADER)
 
         # Status
         y = start_y + 2
-        crack_status = "[CRACKING]" if self.cracking_active else "[IDLE]"
+        crack_status = f"{CIRCLE_FILLED} CRACKING" if self.cracking_active else f"{CIRCLE_EMPTY} IDLE"
         crack_color = curses.color_pair(COLOR_RUNNING) if self.cracking_active else curses.color_pair(COLOR_NORMAL)
         self._safe_addstr(stdscr, y, 1, f" Status: {crack_status}  Mode: {self.cracking_mode}  Wordlist: {self.wordlist_path}", crack_color)
 
@@ -1866,13 +2198,21 @@ class TerminalUI:
             target_line = f" Target: {self.crack_target_ssid or '<hidden>'} ({self.crack_target_bssid})"
             self._safe_addstr(stdscr, y, 1, target_line[:w-2], curses.color_pair(COLOR_WARNING))
 
-        # Progress bar
+        # Progress bar using _draw_progress_bar helper
         y += 1
         if self.cracking_active:
-            bar_w = min(40, w - 20)
-            filled = int(bar_w * self.cracking_progress)
-            bar = "[" + "#" * filled + "-" * (bar_w - filled) + f"] {self.cracking_progress*100:.1f}%"
-            self._safe_addstr(stdscr, y, 1, f" Progress: {bar}", curses.color_pair(COLOR_SUCCESS))
+            bar_w = min(50, w - 4)
+            eta_str = ""
+            if self.cracking_progress > 0:
+                # Estimate ETA based on progress rate
+                eta_str = " ETA: calculating..."
+                if self.cracking_progress > 0.01:
+                    # Simple linear ETA
+                    eta_str = f" ETA: ~{int((1.0 - self.cracking_progress) / self.cracking_progress * 60)}s"
+            self._draw_progress_bar(stdscr, y, 2, bar_w, self.cracking_progress, "Cracking:", COLOR_SUCCESS)
+            if eta_str and y + 1 < h - 3:
+                self._safe_addstr(stdscr, y, 2 + bar_w + 2, eta_str[:w - bar_w - 6],
+                                  curses.color_pair(COLOR_DIM))
 
         # Menu items
         y += 2
@@ -2052,6 +2392,25 @@ class TerminalUI:
             self._handle_input_mode(key)
             return
 
+        # Confirmation dialog handling
+        if self._confirm_active:
+            if key == ord('y') or key == ord('Y'):
+                self._confirm_active = False
+                if self._confirm_callback:
+                    self._confirm_callback()
+                self._confirm_callback = None
+            elif key == ord('n') or key == ord('N') or key == 27:
+                self._confirm_active = False
+                self._confirm_callback = None
+                self.status_message = "Cancelled"
+            return
+
+        # Help overlay handling
+        if self.show_help:
+            if key == ord('?') or key == 27:  # ? or ESC
+                self.show_help = False
+            return
+
         # Popup handling
         if self.show_popup:
             self._handle_popup_input(key)
@@ -2060,6 +2419,8 @@ class TerminalUI:
         # Global keys
         if key == ord('q') or key == ord('Q'):
             self.running = False
+        elif key == ord('?'):
+            self.show_help = True
         elif key == ord('\t'):
             prev_tab = self.active_tab
             self.active_tab = (self.active_tab + 1) % len(TABS)
@@ -2352,6 +2713,7 @@ class TerminalUI:
             else:
                 self._export_targets()
             self.status_message = "Export complete"
+            self._log_activity(f"Exported data from {tab} tab", "export")
         except Exception as e:
             self.status_message = f"Export failed: {e}"
 
@@ -2649,9 +3011,12 @@ class TerminalUI:
             engine.toggle(**kwargs)
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
+                self._log_activity(f"Started {engine.name}", "engine")
+                self._add_notification(f"Engine started: {engine.name}", "info")
             else:
                 self._release_engine_pool(key)
                 self.status_message = f"Stopped: {engine.name}"
+                self._log_activity(f"Stopped {engine.name}", "engine")
             self._save_attack_state()
 
     # ================================================================
@@ -2668,9 +3033,12 @@ class TerminalUI:
             engine.toggle(**kwargs)
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
+                self._log_activity(f"Started {engine.name}", "engine")
+                self._add_notification(f"Engine started: {engine.name}", "info")
             else:
                 self._release_engine_pool(key)
                 self.status_message = f"Stopped: {engine.name}"
+                self._log_activity(f"Stopped {engine.name}", "engine")
             self._save_attack_state()
 
     # ================================================================
@@ -2687,9 +3055,12 @@ class TerminalUI:
             engine.toggle(**kwargs)
             if engine.is_running:
                 self.status_message = f"Started: {engine.name}"
+                self._log_activity(f"Started {engine.name}", "engine")
+                self._add_notification(f"Engine started: {engine.name}", "info")
             else:
                 self._release_engine_pool(key)
                 self.status_message = f"Stopped: {engine.name}"
+                self._log_activity(f"Stopped {engine.name}", "engine")
             self._save_attack_state()
 
     # ================================================================
@@ -2948,6 +3319,8 @@ class TerminalUI:
             t = threading.Thread(target=_run_autopwn, daemon=True)
             t.start()
             self.status_message = "AutoPwn started"
+            self._log_activity("AutoPwn mode activated", "engine")
+            self._add_notification("AutoPwn mode engaged", "warning")
         except Exception as e:
             self.status_message = f"AutoPwn error: {e}"
             self.autopwn_running = False
@@ -2975,6 +3348,8 @@ class TerminalUI:
         self.autopwn_state = "IDLE"
         self._autopwn_loop = None
         self.status_message = "AutoPwn stopped"
+        self._log_activity("AutoPwn mode deactivated", "engine")
+        self._add_notification("AutoPwn stopped", "info")
 
     # ================================================================
     # DATA ACCESS METHODS
@@ -3334,6 +3709,8 @@ class TerminalUI:
             recon_thread.start()
             self.recon_running = True
             self.status_message = "Recon started (press 'a' in Targets to attack)"
+            self._log_activity("Recon engine started", "recon")
+            self._add_notification("Reconnaissance started", "info")
         except Exception as e:
             self.status_message = f"Recon error: {e}"
 
@@ -3346,6 +3723,7 @@ class TerminalUI:
                 pass
             self.recon_running = False
             self.status_message = "Recon stopped"
+            self._log_activity("Recon engine stopped", "recon")
 
     def _stop_recon_and_attack(self):
         """Stop recon and immediately transition to attacking the selected target."""
