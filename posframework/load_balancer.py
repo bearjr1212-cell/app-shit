@@ -361,13 +361,24 @@ class LoadBalancer:
         return strategy_map.get(strategy.lower(), DistributionStrategy.ROUND_ROBIN)
 
     def _get_healthy_available(self) -> List[RadioInterface]:
-        """Get healthy and available interfaces."""
+        """Get healthy and available interfaces.
+
+        Interfaces with no workload entry are treated as healthy (new/untracked).
+        Only interfaces explicitly marked as unhealthy (via consecutive errors)
+        are excluded.
+        """
         available = self._radio_manager.available_interfaces
-        healthy_names = {
+
+        # If no workloads are registered yet, all available interfaces are healthy
+        if not self._workloads:
+            return list(available)
+
+        # Exclude only interfaces explicitly marked unhealthy
+        unhealthy_names = {
             name for name, wl in self._workloads.items()
-            if wl.is_healthy
+            if not wl.is_healthy
         }
-        return [iface for iface in available if iface.name in healthy_names]
+        return [iface for iface in available if iface.name not in unhealthy_names]
 
     def _filter_candidates(
         self,
