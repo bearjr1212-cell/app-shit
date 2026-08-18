@@ -1042,7 +1042,7 @@ class TerminalUI:
             max_len = w - x - 1
             if max_len <= 0:
                 return
-            win.addstr(y, x, str(text)[:max_len], attr)
+            win.addstr(y, x, str(text).replace('\x00', '')[:max_len], attr)
         except curses.error:
             pass
 
