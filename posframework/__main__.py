@@ -26,6 +26,8 @@ import time
 import subprocess
 import argparse
 import ctypes
+import threading
+import select
 
 from .config import (
     DB_NAME, CHANNELS_24GHZ, CHANNELS_5GHZ, IS_WINDOWS, IS_LINUX,
@@ -38,6 +40,7 @@ from .monitor_mode import (
     check_npcap_monitor_support, get_available_interfaces,
     WindowsMonitorManager
 )
+from .intel_enricher import IntelEnricher
 
 
 def is_admin():
@@ -249,6 +252,67 @@ def build_parser():
     return parser
 
 
+def _monitor_for_attack_key(recon_thread, scanner):
+    """
+    Monitor stdin for 'a' keypress to transition from recon to attack mode.
+
+    Returns True if 'a' was pressed, False if recon ended naturally.
+    Works on both Linux (select-based) and Windows (msvcrt).
+    """
+    import sys
+
+    if IS_WINDOWS:
+        try:
+            import msvcrt
+            while recon_thread.is_alive():
+                if msvcrt.kbhit():
+                    ch = msvcrt.getch()
+                    if ch in (b'a', b'A'):
+                        log.info("Attack key pressed - stopping recon...")
+                        scanner.running = False
+                        scanner._stop_event.set()
+                        return True
+                time.sleep(0.1)
+        except ImportError:
+            # msvcrt not available, just wait
+            recon_thread.join()
+    else:
+        import termios
+        import tty
+
+        # Save terminal settings
+        try:
+            old_settings = termios.tcgetattr(sys.stdin.fileno())
+        except (termios.error, ValueError, OSError):
+            # Not a terminal (e.g., piped input), just wait
+            recon_thread.join()
+            return False
+
+        try:
+            # Set terminal to raw mode for single-char reading
+            tty.setcbreak(sys.stdin.fileno())
+            while recon_thread.is_alive():
+                # Check if input is available (non-blocking)
+                rlist, _, _ = select.select([sys.stdin], [], [], 0.2)
+                if rlist:
+                    ch = sys.stdin.read(1)
+                    if ch in ('a', 'A'):
+                        log.info("Attack key pressed - stopping recon...")
+                        scanner.running = False
+                        scanner._stop_event.set()
+                        return True
+        except (OSError, ValueError):
+            recon_thread.join()
+        finally:
+            # Restore terminal settings
+            try:
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+            except (termios.error, ValueError, OSError):
+                pass
+
+    return False
+
+
 def main():
     verify_privileges()
     parser = build_parser()
@@ -298,16 +362,54 @@ def main():
 
     if args.mode == "recon":
         db = POSDatabase()
-        scanner = ReconEngine(args.interface, db, channels=channels)
+        # Create intel enricher for background tool integration
+        enricher = IntelEnricher(interface=args.interface, db=db)
+        scanner = ReconEngine(args.interface, db, channels=channels,
+                              intel_enricher=enricher)
         if getattr(args, 'verbose', False):
             scanner.enable_verbose()
-        log.info("Starting passive recon (Ctrl+C to stop)...")
-        scanner.start(timeout=args.timeout)
-        scanner.stop()
+        log.info("Starting passive recon (Ctrl+C to stop, 'a' to stop and attack)...")
+
+        # Run recon in a thread so we can monitor stdin for 'a' keypress
+        recon_thread = threading.Thread(
+            target=scanner.start, kwargs={"timeout": args.timeout}, daemon=True
+        )
+        recon_thread.start()
+
+        # Monitor for 'a' keypress to transition to attack mode
+        attack_requested = _monitor_for_attack_key(recon_thread, scanner)
+
+        # Ensure scanner is stopped
+        if scanner.running:
+            scanner.stop()
+        recon_thread.join(timeout=5)
+
         stats = db.get_stats()
         log.info(f"Final: {stats['access_points']} APs ({stats['pos_access_points']} POS), "
                  f"{stats['clients']} clients ({stats['pos_clients']} POS)")
-        db.close()
+
+        if attack_requested:
+            log.info("=" * 60)
+            log.info("TRANSITIONING TO ATTACK MODE (using discovered targets)")
+            log.info("=" * 60)
+            # Auto-transition to attack with partial recon data
+            ap_iface = getattr(args, 'ap_interface', DEFAULT_AP_IFACE)
+            orchestrator = AttackOrchestrator(
+                monitor_iface=args.interface,
+                ap_iface=ap_iface,
+                db=db,
+                channels=channels,
+                recon_duration=0,  # Skip recon phase - we already have data
+            )
+            if orchestrator.start():
+                while orchestrator.running:
+                    time.sleep(1)
+            else:
+                log.error("Attack failed to start (no targets found)")
+                db.close()
+                sys.exit(1)
+        else:
+            db.close()
 
     elif args.mode == "attack":
         orchestrator = AttackOrchestrator(

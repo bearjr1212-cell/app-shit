@@ -422,3 +422,13 @@ try:
     from . import wpa3
 except ImportError:
     wpa3 = None
+
+try:
+    from .intel_enricher import IntelEnricher
+except ImportError:
+    IntelEnricher = None
+
+try:
+    from .target_queue import TargetQueue
+except ImportError:
+    TargetQueue = None

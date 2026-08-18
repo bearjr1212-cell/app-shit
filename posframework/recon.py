@@ -93,12 +93,14 @@ class ReconEngine:
     """
 
     def __init__(self, interface, db, channels=None, channel_hop=True,
-                 tshark_psk=None, tshark_ssid=None, pywhat_enabled=False):
+                 tshark_psk=None, tshark_ssid=None, pywhat_enabled=False,
+                 intel_enricher=None):
         self.interface = interface
         self.db = db
         self.channels = channels or CHANNELS_24GHZ
         self.channel_hop = channel_hop
         self.running = False
+        self._stop_event = threading.Event()
         self.parser = manuf.MacParser(update=False)
         self._deauth_times = defaultdict(list)
         self._eapol_tracker = defaultdict(set)
@@ -118,6 +120,8 @@ class ReconEngine:
         # pyWhat attack surface analysis
         self._pywhat_enabled = pywhat_enabled
         self._pywhat_callback: 'PyWhatCallback | None' = None
+        # Intel enricher for background tool integration
+        self._intel_enricher = intel_enricher
 
     _VENDOR_CACHE_MAX = 1024
     _VENDOR_CACHE_TTL = 60  # seconds
@@ -606,6 +610,7 @@ class ReconEngine:
 
     def start(self, timeout=None):
         self.running = True
+        self._stop_event.clear()
         self._start_time = time.time()
         self._packets_processed = 0
         
@@ -627,6 +632,15 @@ class ReconEngine:
         # Start live decryption session if PSK is provided
         if self._tshark_psk:
             self._start_decrypt_session()
+
+        # Start intel enricher if provided
+        if self._intel_enricher:
+            try:
+                tools_started = self._intel_enricher.start()
+                if tools_started > 0:
+                    log.info(f"Intel enrichment active: {tools_started} background tool(s)")
+            except Exception as e:
+                log.warning(f"Intel enricher failed to start: {e}")
         
         log.info(f"Recon active on {self.interface} | Channels: {self.channels}")
         if self.channel_hop:
@@ -640,7 +654,9 @@ class ReconEngine:
                 log.info("Using Wireshark/tshark for packet capture")
             else:
                 log.info("Using scapy for packet capture")
-                sniff(iface=self.interface, prn=self.packet_handler, store=0, timeout=timeout)
+                sniff(iface=self.interface, prn=self.packet_handler, store=0,
+                      timeout=timeout,
+                      stop_filter=lambda _: self._stop_event.is_set())
         except SystemExit:
             pass
         finally:
@@ -656,10 +672,16 @@ class ReconEngine:
             if capture.start():
                 # Run capture for specified timeout
                 if timeout:
-                    time.sleep(timeout)
+                    # Sleep in small increments to allow early stop
+                    end_time = time.time() + timeout
+                    while self.running and not self._stop_event.is_set():
+                        remaining = end_time - time.time()
+                        if remaining <= 0:
+                            break
+                        time.sleep(min(0.5, remaining))
                 else:
-                    while self.running:
-                        time.sleep(1)
+                    while self.running and not self._stop_event.is_set():
+                        time.sleep(0.5)
                 capture.stop()
                 # Process captured packets
                 for pkt in capture.get_packets():
@@ -671,7 +693,15 @@ class ReconEngine:
 
     def stop(self):
         self.running = False
+        self._stop_event.set()
         self._print_status()
+
+        # Stop intel enricher
+        if self._intel_enricher:
+            try:
+                self._intel_enricher.stop()
+            except Exception as e:
+                log.debug(f"Intel enricher stop error: {e}")
         
         # Stop live decryption session
         if self._decrypt_session:

@@ -334,10 +334,25 @@ class AttackOrchestrator:
         }, source="orchestrator")
 
         # ── Phase 1: Passive Recon ────────────────────────────────────────────
-        log.info(f"Phase 1: Passive recon ({self.recon_duration}s)...")
-        self.recon.set_signal_targeting(self.signal_filter)
-        self.recon.start(timeout=self.recon_duration)
-        self.recon.stop()
+        if self.recon_duration > 0:
+            log.info(f"Phase 1: Passive recon ({self.recon_duration}s)...")
+            self.recon.set_signal_targeting(self.signal_filter)
+
+            # Start intel enricher alongside recon for real-time data enrichment
+            intel_enricher = None
+            try:
+                from .intel_enricher import IntelEnricher
+                intel_enricher = IntelEnricher(
+                    interface=self.monitor_iface, db=self.db
+                )
+                self.recon._intel_enricher = intel_enricher
+            except (ImportError, Exception) as e:
+                log.debug(f"Intel enricher not available: {e}")
+
+            self.recon.start(timeout=self.recon_duration)
+            self.recon.stop()
+        else:
+            log.info("Phase 1: Skipped (using existing recon data)")
 
         stats = self.db.get_stats()
         log.info(f"Recon complete: {stats['access_points']} APs, "

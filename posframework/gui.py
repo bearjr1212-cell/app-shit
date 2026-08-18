@@ -1225,6 +1225,8 @@ class TerminalUI:
         sort_name = SORT_MODES[self.sort_mode]
         view_label = "Access Points" if self.target_view == "ap" else "Clients"
         header = f" [{view_label}] Sort: {sort_name} | Space: Toggle AP/Client View | s: Cycle Sort"
+        if self.recon_running:
+            header += " | a: Stop Recon & Attack"
         self._safe_addstr(stdscr, start_y, 1, header, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
 
         if self.target_view == "ap":
@@ -1875,7 +1877,11 @@ class TerminalUI:
         elif key == ord('s') or key == ord('S'):
             self._handle_sort()
         elif key == ord('a') or key == ord('A'):
-            self._handle_autopwn()
+            # In Targets tab during recon: stop recon and attack selected target
+            if TABS[self.active_tab] == "Targets" and self.recon_running:
+                self._stop_recon_and_attack()
+            else:
+                self._handle_autopwn()
         elif key == ord('e') or key == ord('E'):
             self._handle_export()
         elif key == ord('r') or key == ord('R'):
@@ -2932,20 +2938,35 @@ class TerminalUI:
     # ================================================================
 
     def _start_recon(self):
-        """Start the recon engine."""
+        """Start the recon engine with live intel enrichment."""
         if ReconEngine is None:
             self.status_message = "Recon not available (scapy missing)"
             return
         try:
+            # Create intel enricher for background tool integration
+            intel_enricher = None
+            try:
+                from .intel_enricher import IntelEnricher
+                intel_enricher = IntelEnricher(
+                    interface=self.monitor_iface, db=self.db
+                )
+            except (ImportError, Exception):
+                pass
+
             if self.recon_engine is None:
                 self.recon_engine = ReconEngine(
                     db=self.db,
                     interface=self.monitor_iface,
                     channels=self.channels,
+                    intel_enricher=intel_enricher,
                 )
-            self.recon_engine.start()
+            # Start recon in background thread
+            recon_thread = threading.Thread(
+                target=self.recon_engine.start, daemon=True, name="GUI-Recon"
+            )
+            recon_thread.start()
             self.recon_running = True
-            self.status_message = "Recon started"
+            self.status_message = "Recon started (press 'a' in Targets to attack)"
         except Exception as e:
             self.status_message = f"Recon error: {e}"
 
@@ -2958,6 +2979,57 @@ class TerminalUI:
                 pass
             self.recon_running = False
             self.status_message = "Recon stopped"
+
+    def _stop_recon_and_attack(self):
+        """Stop recon and immediately transition to attacking the selected target."""
+        # Stop the recon engine
+        self._stop_recon()
+
+        # Get selected target
+        target = self.selected_target
+        if not target:
+            aps = self._get_access_points()
+            if aps:
+                target = aps[0]  # Use strongest/first AP if none selected
+
+        if not target:
+            self.status_message = "No targets discovered yet"
+            return
+
+        bssid = target.get("bssid")
+        ssid = target.get("ssid", "")
+        channel = target.get("channel")
+
+        self.status_message = f"Attacking: {ssid} ({bssid})"
+        log.info(f"Stop-and-attack: targeting {ssid} ({bssid}) ch {channel}")
+
+        # Launch attack via the orchestrator in a background thread
+        try:
+            from .orchestrator import AttackOrchestrator
+            orchestrator = AttackOrchestrator(
+                monitor_iface=self.monitor_iface,
+                ap_iface=self.ap_iface,
+                db=self.db,
+                channels=self.channels,
+                target_bssid=bssid,
+                target_ssid=ssid,
+                target_channel=channel,
+                recon_duration=0,  # Skip recon - we already have data
+            )
+
+            def _run_attack():
+                try:
+                    orchestrator.start()
+                except Exception as e:
+                    log.error(f"Attack error: {e}")
+
+            attack_thread = threading.Thread(
+                target=_run_attack, daemon=True, name="StopAndAttack"
+            )
+            attack_thread.start()
+            self.status_message = f"Attack launched against {ssid}"
+        except Exception as e:
+            self.status_message = f"Attack failed: {e}"
 
     # ================================================================
     # CLEANUP
