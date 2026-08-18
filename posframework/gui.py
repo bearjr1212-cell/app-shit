@@ -440,10 +440,51 @@ COLOR_CYAN_BG = 10
 COLOR_HIGHLIGHT = 11
 COLOR_RUNNING = 12
 COLOR_STOPPED = 13
+COLOR_DIM = 14
+COLOR_CRITICAL = 15
+COLOR_DIVIDER = 16
+COLOR_GRADIENT = 17
+
+# ---- UI Theme Constants (Unicode Box Drawing & Indicators) ----
+# Single-line box drawing
+BOX_H = "\u2500"          # horizontal line
+BOX_V = "\u2502"          # vertical line
+BOX_TL = "\u250c"         # top-left corner
+BOX_TR = "\u2510"         # top-right corner
+BOX_BL = "\u2514"         # bottom-left corner
+BOX_BR = "\u2518"         # bottom-right corner
+BOX_T_DOWN = "\u252c"     # T-junction pointing down
+BOX_T_UP = "\u2534"       # T-junction pointing up
+BOX_T_RIGHT = "\u251c"    # T-junction pointing right
+BOX_T_LEFT = "\u2524"     # T-junction pointing left
+BOX_CROSS = "\u253c"      # cross junction
+
+# Double-line box drawing (for popups)
+DOUBLE_BOX_H = "\u2550"   # double horizontal
+DOUBLE_BOX_V = "\u2551"   # double vertical
+DOUBLE_BOX_TL = "\u2554"  # double top-left
+DOUBLE_BOX_TR = "\u2557"  # double top-right
+DOUBLE_BOX_BL = "\u255a"  # double bottom-left
+DOUBLE_BOX_BR = "\u255d"  # double bottom-right
+
+# Status indicators
+BULLET = "\u2022"         # bullet point
+ARROW_RIGHT = "\u25b6"    # right-pointing triangle
+CHECK_MARK = "\u2714"     # check mark
+CROSS_MARK = "\u2718"     # cross mark
+CIRCLE_FILLED = "\u25cf"  # filled circle (running)
+CIRCLE_EMPTY = "\u25cb"   # empty circle (idle)
+CIRCLE_DOT = "\u25c9"     # circle with dot (pulsing)
+
+# Spinner frames for animated indicators
+SPINNER_FRAMES = ["\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"]
+
+# Progress bar blocks
+PROGRESS_BLOCKS = [" ", "\u2591", "\u2592", "\u2593", "\u2588"]  # empty, light, medium, dark, full
 
 
 def _init_colors():
-    """Initialize curses color pairs."""
+    """Initialize curses color pairs with enhanced theme."""
     curses.start_color()
     curses.use_default_colors()
     curses.init_pair(COLOR_HEADER, curses.COLOR_CYAN, -1)
@@ -459,6 +500,10 @@ def _init_colors():
     curses.init_pair(COLOR_HIGHLIGHT, curses.COLOR_BLACK, curses.COLOR_YELLOW)
     curses.init_pair(COLOR_RUNNING, curses.COLOR_GREEN, -1)
     curses.init_pair(COLOR_STOPPED, curses.COLOR_RED, -1)
+    curses.init_pair(COLOR_DIM, curses.COLOR_WHITE, -1)
+    curses.init_pair(COLOR_CRITICAL, curses.COLOR_RED, -1)
+    curses.init_pair(COLOR_DIVIDER, curses.COLOR_BLUE, -1)
+    curses.init_pair(COLOR_GRADIENT, curses.COLOR_CYAN, -1)
 
 
 # ---- Log Capture Handler ----
@@ -1062,7 +1107,7 @@ class TerminalUI:
             pass
 
     def _draw_box(self, win, y, x, height, width, title=""):
-        """Draw a bordered box with optional title."""
+        """Draw a bordered box with optional title using Unicode box-drawing."""
         try:
             h, w = win.getmaxyx()
             if y + height > h or x + width > w:
@@ -1071,16 +1116,72 @@ class TerminalUI:
             if height < 2 or width < 2:
                 return
             # Top border
-            self._safe_addstr(win, y, x, "+" + "-" * (width - 2) + "+")
+            self._safe_addstr(win, y, x, BOX_TL + BOX_H * (width - 2) + BOX_TR)
             # Sides
             for i in range(1, height - 1):
-                self._safe_addstr(win, y + i, x, "|")
-                self._safe_addstr(win, y + i, x + width - 1, "|")
+                self._safe_addstr(win, y + i, x, BOX_V)
+                self._safe_addstr(win, y + i, x + width - 1, BOX_V)
             # Bottom border
-            self._safe_addstr(win, y + height - 1, x, "+" + "-" * (width - 2) + "+")
+            self._safe_addstr(win, y + height - 1, x, BOX_BL + BOX_H * (width - 2) + BOX_BR)
             # Title
             if title:
-                self._safe_addstr(win, y, x + 2, f" {title} ", curses.color_pair(COLOR_HEADER))
+                self._safe_addstr(win, y, x + 2, f" {title} ", curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+    def _draw_section_header(self, stdscr, y, x, w, title, color_pair=COLOR_HEADER):
+        """Draw a section title with horizontal line extending to fill the width."""
+        try:
+            title_str = f" {title} "
+            self._safe_addstr(stdscr, y, x, BOX_T_RIGHT + BOX_H, curses.color_pair(color_pair))
+            self._safe_addstr(stdscr, y, x + 2, title_str, curses.color_pair(color_pair) | curses.A_BOLD)
+            line_start = x + 2 + len(title_str)
+            remaining = w - line_start - 1
+            if remaining > 0:
+                self._safe_addstr(stdscr, y, line_start, BOX_H * remaining, curses.color_pair(color_pair))
+        except curses.error:
+            pass
+
+    def _draw_progress_bar(self, stdscr, y, x, w, progress, label='', color_pair=COLOR_SUCCESS):
+        """Render a Unicode block-character progress bar with percentage and optional label."""
+        try:
+            # Clamp progress to 0-1
+            progress = max(0.0, min(1.0, progress))
+            # Reserve space for label and percentage
+            pct_str = f" {int(progress * 100)}%"
+            label_str = f"{label} " if label else ""
+            bar_width = w - len(label_str) - len(pct_str) - 2  # 2 for brackets
+            if bar_width < 3:
+                return
+
+            # Draw label
+            if label_str:
+                self._safe_addstr(stdscr, y, x, label_str, curses.color_pair(color_pair))
+
+            # Build the bar using block characters
+            filled = int(bar_width * progress)
+            remainder = (bar_width * progress) - filled
+            bar_str = PROGRESS_BLOCKS[4] * filled  # full blocks
+
+            # Partial block for fractional part
+            if remainder > 0.75:
+                bar_str += PROGRESS_BLOCKS[3]
+            elif remainder > 0.5:
+                bar_str += PROGRESS_BLOCKS[2]
+            elif remainder > 0.25:
+                bar_str += PROGRESS_BLOCKS[1]
+            elif filled < bar_width:
+                bar_str += PROGRESS_BLOCKS[0]
+
+            # Fill remaining with empty
+            bar_str += PROGRESS_BLOCKS[0] * (bar_width - len(bar_str))
+            bar_str = bar_str[:bar_width]
+
+            bar_x = x + len(label_str)
+            self._safe_addstr(stdscr, y, bar_x, "[", curses.color_pair(color_pair))
+            self._safe_addstr(stdscr, y, bar_x + 1, bar_str, curses.color_pair(color_pair) | curses.A_BOLD)
+            self._safe_addstr(stdscr, y, bar_x + 1 + bar_width, "]", curses.color_pair(color_pair))
+            self._safe_addstr(stdscr, y, bar_x + 2 + bar_width, pct_str, curses.color_pair(color_pair))
         except curses.error:
             pass
 
@@ -1117,26 +1218,41 @@ class TerminalUI:
         stdscr.refresh()
 
     def _draw_header(self, stdscr, w):
-        """Draw the header banner."""
-        title = f" POSFramework v{VERSION} - Advanced WiFi Security Suite "
+        """Draw the header banner with version, subtitle, and time."""
+        # Full-width background
         self._safe_addstr(stdscr, 0, 0, " " * w, curses.color_pair(COLOR_STATUS))
-        x = max(0, (w - len(title)) // 2)
-        self._safe_addstr(stdscr, 0, x, title, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+        # Title (bold cyan)
+        title = f" POSFramework v{VERSION}"
+        self._safe_addstr(stdscr, 0, 0, title, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+        # Subtitle (dim)
+        subtitle = " Advanced WiFi Security Suite"
+        sub_x = len(title)
+        if sub_x + len(subtitle) < w - 10:
+            self._safe_addstr(stdscr, 0, sub_x, subtitle, curses.color_pair(COLOR_STATUS))
+        # Time on the right
+        now = datetime.now().strftime("%H:%M:%S")
+        time_str = f" {now} "
+        time_x = max(0, w - len(time_str) - 1)
+        self._safe_addstr(stdscr, 0, time_x, time_str, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
 
     def _draw_tabs(self, stdscr, w):
-        """Draw the tab bar."""
+        """Draw the tab bar with modern Unicode indicators."""
         x = 0
         for i, tab in enumerate(TABS):
-            label = f" {i+1}:{tab} "
             if i == self.active_tab:
+                label = f" [{i+1}:{tab}] "
                 attr = curses.color_pair(COLOR_TAB_ACTIVE) | curses.A_BOLD
             else:
+                label = f"  {i+1}:{tab}  "
                 attr = curses.color_pair(COLOR_TAB_INACTIVE)
             self._safe_addstr(stdscr, 1, x, label, attr)
             x += len(label)
         # Fill remainder
         if x < w:
             self._safe_addstr(stdscr, 1, x, " " * (w - x - 1), curses.color_pair(COLOR_TAB_INACTIVE))
+        # Visual separator between tabs and content
+        separator = BOX_H * (w - 1)
+        self._safe_addstr(stdscr, 2, 0, separator, curses.color_pair(COLOR_DIVIDER))
 
     def _draw_content(self, stdscr, h, w):
         """Draw content based on active tab."""
@@ -1162,7 +1278,7 @@ class TerminalUI:
             self._draw_settings_tab(stdscr, h, w)
 
     def _draw_status_bar(self, stdscr, h, w):
-        """Draw the status bar with running engine info."""
+        """Draw the status bar with color-coded segments and pulsing indicator."""
         y = h - 2
         self._safe_addstr(stdscr, y, 0, " " * w, curses.color_pair(COLOR_STATUS))
 
@@ -1182,40 +1298,96 @@ class TerminalUI:
         clients = self._get_clients()
         creds = self._get_credentials_count()
 
-        parts = []
-        parts.append(f"Engines:{running_count}")
-        parts.append(f"APs:{len(aps)}")
-        parts.append(f"Clients:{len(clients)}")
-        parts.append(f"Creds:{creds}")
+        # Pulsing dot indicator for active engines
+        pulse_char = CIRCLE_FILLED if (int(time.time()) % 2 == 0 and running_count > 0) else CIRCLE_EMPTY
+
+        x_pos = 1
+        # Pulsing indicator
+        if running_count > 0:
+            self._safe_addstr(stdscr, y, x_pos, f"{pulse_char}", curses.color_pair(COLOR_RUNNING))
+            x_pos += 2
+
+        # Engines (green)
+        eng_str = f"Engines: {running_count}"
+        self._safe_addstr(stdscr, y, x_pos, eng_str, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+        x_pos += len(eng_str)
+
+        # Separator
+        self._safe_addstr(stdscr, y, x_pos, " \u2502 ", curses.color_pair(COLOR_STATUS))
+        x_pos += 3
+
+        # APs (cyan)
+        ap_str = f"APs: {len(aps)}"
+        self._safe_addstr(stdscr, y, x_pos, ap_str, curses.color_pair(COLOR_STATUS))
+        x_pos += len(ap_str)
+
+        self._safe_addstr(stdscr, y, x_pos, " \u2502 ", curses.color_pair(COLOR_STATUS))
+        x_pos += 3
+
+        # Clients
+        cli_str = f"Clients: {len(clients)}"
+        self._safe_addstr(stdscr, y, x_pos, cli_str, curses.color_pair(COLOR_STATUS))
+        x_pos += len(cli_str)
+
+        self._safe_addstr(stdscr, y, x_pos, " \u2502 ", curses.color_pair(COLOR_STATUS))
+        x_pos += 3
+
+        # Creds (yellow)
+        cred_str = f"Creds: {creds}"
+        self._safe_addstr(stdscr, y, x_pos, cred_str, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+        x_pos += len(cred_str)
 
         if self.recon_running:
-            parts.append("[RECON]")
+            self._safe_addstr(stdscr, y, x_pos, " \u2502 ", curses.color_pair(COLOR_STATUS))
+            x_pos += 3
+            self._safe_addstr(stdscr, y, x_pos, f"{CIRCLE_FILLED} RECON", curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+            x_pos += 7
+
         if self.autopwn_running:
-            parts.append(f"[AUTOPWN:{self.autopwn_state}]")
+            self._safe_addstr(stdscr, y, x_pos, " \u2502 ", curses.color_pair(COLOR_STATUS))
+            x_pos += 3
+            self._safe_addstr(stdscr, y, x_pos, f"{CIRCLE_FILLED} AUTOPWN:{self.autopwn_state}", curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+            x_pos += 10 + len(str(self.autopwn_state))
+
         if self.selected_target:
             ssid = self.selected_target.get("ssid", "?")[:16]
             bssid = self.selected_target.get("bssid", "?")[:17]
-            parts.append(f"Target: {ssid} ({bssid})")
+            self._safe_addstr(stdscr, y, x_pos, " \u2502 ", curses.color_pair(COLOR_STATUS))
+            x_pos += 3
+            target_str = f"{ARROW_RIGHT} {ssid} ({bssid})"
+            self._safe_addstr(stdscr, y, x_pos, target_str, curses.color_pair(COLOR_STATUS))
+            x_pos += len(target_str)
 
+        # Time on the right
         now = datetime.now().strftime("%H:%M:%S")
-        parts.append(now)
-
-        status_text = " | ".join(parts)
-        self._safe_addstr(stdscr, y, 1, status_text, curses.color_pair(COLOR_STATUS))
+        time_x = max(x_pos + 2, w - len(now) - 2)
+        self._safe_addstr(stdscr, y, time_x, now, curses.color_pair(COLOR_STATUS))
 
     def _draw_help_bar(self, stdscr, h, w):
-        """Draw context-sensitive help bar."""
+        """Draw context-sensitive help bar with bracketed key indicators."""
         y = h - 1
         tab = TABS[self.active_tab]
         if tab == "Targets":
-            help_text = " q:Quit Tab/1-9:Tabs s:Sort Enter:Attack Menu Space:Toggle View arrows:Nav a:AutoPwn r:Refresh"
+            keys = [("Q", "Quit"), ("Tab", "Switch"), ("s", "Sort"), ("Enter", "Attack"), ("Space", "Toggle"), ("\u2191\u2193", "Nav"), ("a", "AutoPwn"), ("r", "Refresh")]
         elif tab == "Harvester":
-            help_text = " q:Quit Tab/1-9:Tabs Enter:Start/Stop Space:Config e:Export r:Refresh"
+            keys = [("Q", "Quit"), ("Tab", "Switch"), ("Enter", "Start/Stop"), ("Space", "Config"), ("e", "Export"), ("r", "Refresh")]
         elif tab == "Cracking":
-            help_text = " q:Quit Tab/1-9:Tabs Enter:Start/Stop Space:Toggle Mode arrows:Nav"
+            keys = [("Q", "Quit"), ("Tab", "Switch"), ("Enter", "Start/Stop"), ("Space", "Mode"), ("\u2191\u2193", "Nav")]
         else:
-            help_text = " q:Quit Tab/1-9:Tabs Enter:Action Space:Toggle arrows:Nav a:AutoPwn e:Export r:Refresh"
-        self._safe_addstr(stdscr, y, 0, help_text[:w-1], curses.color_pair(COLOR_HEADER))
+            keys = [("Q", "Quit"), ("Tab", "Switch"), ("Enter", "Action"), ("Space", "Toggle"), ("\u2191\u2193", "Nav"), ("a", "AutoPwn"), ("e", "Export"), ("r", "Refresh")]
+
+        x_pos = 1
+        for key, desc in keys:
+            if x_pos >= w - 10:
+                break
+            # Key in brackets with highlight color
+            key_str = f"[{key}]"
+            self._safe_addstr(stdscr, y, x_pos, key_str, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+            x_pos += len(key_str)
+            # Description
+            desc_str = f" {desc} "
+            self._safe_addstr(stdscr, y, x_pos, desc_str, curses.color_pair(COLOR_DIM))
+            x_pos += len(desc_str)
 
     # ================================================================
     # TARGETS TAB
@@ -1224,15 +1396,15 @@ class TerminalUI:
     def _draw_targets_tab(self, stdscr, h, w):
         """Draw the Targets tab with sortable AP and client tables."""
         start_y = 3
-        # Header
+        # Header using section header
         sort_name = SORT_MODES[self.sort_mode]
         view_label = "Access Points" if self.target_view == "ap" else "Clients"
-        header = f" [{view_label}] Sort: {sort_name} | Space: Toggle AP/Client View | s: Cycle Sort"
+        header = f"[{view_label}] Sort: {sort_name} | Space: Toggle AP/Client View | s: Cycle Sort"
         if self.recon_running:
-            header += " | a: Stop Recon & Attack | x: Stop Recon"
+            header += f" | {CIRCLE_FILLED} Recon Active"
         else:
             header += " | r: Start Recon"
-        self._safe_addstr(stdscr, start_y, 1, header, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        self._draw_section_header(stdscr, start_y, 1, w - 2, header, COLOR_HEADER)
 
         if self.target_view == "ap":
             self._draw_ap_table(stdscr, start_y + 2, h, w)
@@ -1240,13 +1412,13 @@ class TerminalUI:
             self._draw_client_table(stdscr, start_y + 2, h, w)
 
     def _draw_ap_table(self, stdscr, start_y, h, w):
-        """Draw AP table with columns."""
+        """Draw AP table with columns and alternating row shading."""
         # Column headers
         cols = " {:17s} {:20s} {:3s} {:8s} {:5s} {:12s} {:3s} {:4s}".format(
             "BSSID", "SSID", "Ch", "Security", "RSSI", "Vendor", "POS", "Cli"
         )
         self._safe_addstr(stdscr, start_y, 1, cols[:w-2], curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
-        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+        self._safe_addstr(stdscr, start_y + 1, 1, BOX_H * (w - 2), curses.color_pair(COLOR_DIVIDER))
 
         aps = self._get_access_points()
         max_rows = h - start_y - 5
@@ -1266,8 +1438,10 @@ class TerminalUI:
             pos = "YES" if ap.get("is_pos", False) else ""
             cli_count = str(ap.get("client_count", 0))[:4]
 
-            line = " {:17s} {:20s} {:3s} {:8s} {:5s} {:12s} {:3s} {:4s}".format(
-                bssid, ssid, ch, sec, rssi, vendor, pos, cli_count
+            # Use arrow for selected item
+            prefix = f" {ARROW_RIGHT}" if actual_idx == self.selected_target_idx else "  "
+            line = "{} {:17s} {:20s} {:3s} {:8s} {:5s} {:12s} {:3s} {:4s}".format(
+                prefix, bssid, ssid, ch, sec, rssi, vendor, pos, cli_count
             )
 
             if actual_idx == self.selected_target_idx:
@@ -1275,6 +1449,8 @@ class TerminalUI:
                 self.selected_target = ap
             elif ap.get("is_pos", False):
                 attr = curses.color_pair(COLOR_WARNING)
+            elif i % 2 == 0:
+                attr = curses.color_pair(COLOR_NORMAL) | curses.A_DIM
             else:
                 attr = curses.color_pair(COLOR_NORMAL)
 
@@ -1286,7 +1462,7 @@ class TerminalUI:
             "MAC", "Vendor", "Associated AP", "RSSI", "OS", "DevType"
         )
         self._safe_addstr(stdscr, start_y, 1, cols[:w-2], curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
-        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+        self._safe_addstr(stdscr, start_y + 1, 1, BOX_H * (w - 2), curses.color_pair(COLOR_DIVIDER))
 
         clients = self._get_clients()
         max_rows = h - start_y - 5
@@ -1323,14 +1499,13 @@ class TerminalUI:
     def _draw_wifi_attacks_tab(self, stdscr, h, w):
         """Draw WiFi Attacks tab with all attack modules."""
         start_y = 3
-        title = " WiFi Attack Modules (Enter: Toggle Start/Stop)"
-        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        self._draw_section_header(stdscr, start_y, 1, w - 2, "WiFi Attack Modules (Enter: Toggle Start/Stop)", COLOR_HEADER)
 
         if self.selected_target:
-            target_info = f" Target: {self.selected_target.get('ssid', '?')} ({self.selected_target.get('bssid', '?')})"
+            target_info = f" {ARROW_RIGHT} Target: {self.selected_target.get('ssid', '?')} ({self.selected_target.get('bssid', '?')})"
             self._safe_addstr(stdscr, start_y + 1, 1, target_info, curses.color_pair(COLOR_WARNING))
 
-        self._safe_hline(stdscr, start_y + 2, 1, curses.ACS_HLINE, w - 2)
+        self._safe_addstr(stdscr, start_y + 2, 1, BOX_H * (w - 2), curses.color_pair(COLOR_DIVIDER))
 
         y = start_y + 3
         items = list(self.wifi_attacks.items())
@@ -1343,24 +1518,24 @@ class TerminalUI:
             if row_y >= h - 3:
                 break
 
-            # Status indicator
+            # Status indicator with Unicode circles
             if engine.is_running:
-                status = "[RUNNING]"
+                status = f"{CIRCLE_FILLED} RUNNING"
                 status_color = curses.color_pair(COLOR_RUNNING)
             elif engine.status == EngineStatus.FAILED:
-                status = "[FAILED]"
+                status = f"{CROSS_MARK} FAILED"
                 status_color = curses.color_pair(COLOR_ERROR)
             elif engine.status == EngineStatus.SUCCESS:
-                status = "[DONE]"
+                status = f"{CHECK_MARK} DONE"
                 status_color = curses.color_pair(COLOR_SUCCESS)
             elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
-                status = "[SAVED]"
+                status = f"{CIRCLE_DOT} SAVED"
                 status_color = curses.color_pair(COLOR_WARNING)
             else:
-                status = "[IDLE]"
+                status = f"{CIRCLE_EMPTY} IDLE"
                 status_color = curses.color_pair(COLOR_NORMAL)
 
-            avail = "*" if engine.available else "x"
+            avail = BULLET if engine.available else CROSS_MARK
             line = f" {avail} {engine.name:<28s} {status}"
 
             if actual_idx == self.menu_selected:
@@ -1377,14 +1552,13 @@ class TerminalUI:
     def _draw_cred_attacks_tab(self, stdscr, h, w):
         """Draw Credential Attacks tab."""
         start_y = 3
-        title = " Credential Attack Modules (Enter: Toggle Start/Stop)"
-        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        self._draw_section_header(stdscr, start_y, 1, w - 2, "Credential Attack Modules (Enter: Toggle Start/Stop)", COLOR_HEADER)
 
         if self.selected_target:
-            target_info = f" Target: {self.selected_target.get('ssid', '?')} ({self.selected_target.get('bssid', '?')})"
+            target_info = f" {ARROW_RIGHT} Target: {self.selected_target.get('ssid', '?')} ({self.selected_target.get('bssid', '?')})"
             self._safe_addstr(stdscr, start_y + 1, 1, target_info, curses.color_pair(COLOR_WARNING))
 
-        self._safe_hline(stdscr, start_y + 2, 1, curses.ACS_HLINE, w - 2)
+        self._safe_addstr(stdscr, start_y + 2, 1, BOX_H * (w - 2), curses.color_pair(COLOR_DIVIDER))
 
         y = start_y + 3
         items = list(self.cred_attacks.items())
@@ -1398,19 +1572,19 @@ class TerminalUI:
                 break
 
             if engine.is_running:
-                status = "[RUNNING]"
+                status = f"{CIRCLE_FILLED} RUNNING"
                 status_color = curses.color_pair(COLOR_RUNNING)
             elif engine.status == EngineStatus.FAILED:
-                status = "[FAILED]"
+                status = f"{CROSS_MARK} FAILED"
                 status_color = curses.color_pair(COLOR_ERROR)
             elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
-                status = "[SAVED]"
+                status = f"{CIRCLE_DOT} SAVED"
                 status_color = curses.color_pair(COLOR_WARNING)
             else:
-                status = "[IDLE]"
+                status = f"{CIRCLE_EMPTY} IDLE"
                 status_color = curses.color_pair(COLOR_NORMAL)
 
-            avail = "*" if engine.available else "x"
+            avail = BULLET if engine.available else CROSS_MARK
             line = f" {avail} {engine.name:<28s} {status}"
 
             if actual_idx == self.menu_selected:
@@ -1427,18 +1601,17 @@ class TerminalUI:
     def _draw_mitm_tab(self, stdscr, h, w):
         """Draw MITM tab with attack modules and intercepted traffic."""
         start_y = 3
-        title = " Man-in-the-Middle Attacks"
-        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        self._draw_section_header(stdscr, start_y, 1, w - 2, "Man-in-the-Middle Attacks", COLOR_HEADER)
 
         # Config display
         cfg_y = start_y + 1
         target_info = ""
         if self.selected_target:
-            target_info = f" [From: {self.selected_target.get('ssid', '?')} ({self.selected_target.get('bssid', '?')})]"
+            target_info = f" [{ARROW_RIGHT} {self.selected_target.get('ssid', '?')} ({self.selected_target.get('bssid', '?')})]"
         self._safe_addstr(stdscr, cfg_y, 1,
                           f" Target IP: {self.mitm_target_ip or '<not set>'} | Gateway: {self.mitm_gateway_ip or '<not set>'} | DNS Domain: {self.dns_spoof_domain or '<any>'}{target_info}",
                           curses.color_pair(COLOR_WARNING))
-        self._safe_hline(stdscr, cfg_y + 1, 1, curses.ACS_HLINE, w - 2)
+        self._safe_addstr(stdscr, cfg_y + 1, 1, BOX_H * (w - 2), curses.color_pair(COLOR_DIVIDER))
 
         # Attack modules
         y = cfg_y + 2
@@ -1449,16 +1622,16 @@ class TerminalUI:
                 break
 
             if engine.is_running:
-                status = "[RUNNING]"
+                status = f"{CIRCLE_FILLED} RUNNING"
                 status_color = curses.color_pair(COLOR_RUNNING)
             elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
-                status = "[SAVED]"
+                status = f"{CIRCLE_DOT} SAVED"
                 status_color = curses.color_pair(COLOR_WARNING)
             else:
-                status = "[IDLE]"
+                status = f"{CIRCLE_EMPTY} IDLE"
                 status_color = curses.color_pair(COLOR_NORMAL)
 
-            avail = "*" if engine.available else "x"
+            avail = BULLET if engine.available else CROSS_MARK
             line = f" {avail} {engine.name:<28s} {status}"
 
             if i == self.menu_selected:
@@ -1470,16 +1643,14 @@ class TerminalUI:
 
         # Intercepted traffic table
         traffic_y = y + len(items) + 1
-        self._safe_addstr(stdscr, traffic_y, 1, " Intercepted Traffic:",
-                          curses.color_pair(COLOR_ACCENT) | curses.A_BOLD)
-        self._safe_hline(stdscr, traffic_y + 1, 1, curses.ACS_HLINE, w - 2)
+        self._draw_section_header(stdscr, traffic_y, 1, w - 2, "Intercepted Traffic", COLOR_ACCENT)
 
         cols = " {:15s} {:15s} {:8s} {:30s}".format("Source", "Dest", "Proto", "Data")
-        self._safe_addstr(stdscr, traffic_y + 2, 1, cols[:w-2], curses.color_pair(COLOR_ACCENT))
+        self._safe_addstr(stdscr, traffic_y + 1, 1, cols[:w-2], curses.color_pair(COLOR_ACCENT))
 
         max_traffic = h - traffic_y - 6
         for i, traffic in enumerate(self.intercepted_traffic[-max_traffic:]):
-            ty = traffic_y + 3 + i
+            ty = traffic_y + 2 + i
             if ty >= h - 3:
                 break
             src = traffic.get("src", "?")[:15]
@@ -1496,9 +1667,8 @@ class TerminalUI:
     def _draw_network_tab(self, stdscr, h, w):
         """Draw Network tab."""
         start_y = 3
-        title = " Network Reconnaissance & Exploitation"
-        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+        self._draw_section_header(stdscr, start_y, 1, w - 2, "Network Reconnaissance & Exploitation", COLOR_HEADER)
+        self._safe_addstr(stdscr, start_y + 1, 1, BOX_H * (w - 2), curses.color_pair(COLOR_DIVIDER))
 
         y = start_y + 2
         items = list(self.network_modules.items())
@@ -1512,19 +1682,19 @@ class TerminalUI:
                 break
 
             if engine.is_running:
-                status = "[RUNNING]"
+                status = f"{CIRCLE_FILLED} RUNNING"
                 status_color = curses.color_pair(COLOR_RUNNING)
             elif engine.status == EngineStatus.FAILED:
-                status = "[FAILED]"
+                status = f"{CROSS_MARK} FAILED"
                 status_color = curses.color_pair(COLOR_ERROR)
             elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
-                status = "[SAVED]"
+                status = f"{CIRCLE_DOT} SAVED"
                 status_color = curses.color_pair(COLOR_WARNING)
             else:
-                status = "[IDLE]"
+                status = f"{CIRCLE_EMPTY} IDLE"
                 status_color = curses.color_pair(COLOR_NORMAL)
 
-            avail = "*" if engine.available else "x"
+            avail = BULLET if engine.available else CROSS_MARK
             line = f" {avail} {engine.name:<28s} {status}"
 
             if actual_idx == self.menu_selected:
@@ -1541,9 +1711,8 @@ class TerminalUI:
     def _draw_ble_sdr_tab(self, stdscr, h, w):
         """Draw BLE/SDR tab with all BLE, SDR, and GPS modules."""
         start_y = 3
-        title = " BLE / SDR / GPS Modules"
-        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-        self._safe_hline(stdscr, start_y + 1, 1, curses.ACS_HLINE, w - 2)
+        self._draw_section_header(stdscr, start_y, 1, w - 2, "BLE / SDR / GPS Modules", COLOR_HEADER)
+        self._safe_addstr(stdscr, start_y + 1, 1, BOX_H * (w - 2), curses.color_pair(COLOR_DIVIDER))
 
         y = start_y + 2
         items = list(self.ble_sdr_modules.items())
@@ -1557,19 +1726,19 @@ class TerminalUI:
                 break
 
             if engine.is_running:
-                status = "[RUNNING]"
+                status = f"{CIRCLE_FILLED} RUNNING"
                 status_color = curses.color_pair(COLOR_RUNNING)
             elif engine.status == EngineStatus.FAILED:
-                status = "[FAILED]"
+                status = f"{CROSS_MARK} FAILED"
                 status_color = curses.color_pair(COLOR_ERROR)
             elif engine.status == EngineStatus.PREVIOUSLY_ACTIVE:
-                status = "[SAVED]"
+                status = f"{CIRCLE_DOT} SAVED"
                 status_color = curses.color_pair(COLOR_WARNING)
             else:
-                status = "[IDLE]"
+                status = f"{CIRCLE_EMPTY} IDLE"
                 status_color = curses.color_pair(COLOR_NORMAL)
 
-            avail = "*" if engine.available else "x"
+            avail = BULLET if engine.available else CROSS_MARK
             line = f" {avail} {engine.name:<28s} {status}"
 
             if actual_idx == self.menu_selected:
@@ -1586,12 +1755,11 @@ class TerminalUI:
     def _draw_harvester_tab(self, stdscr, h, w):
         """Draw Harvester tab - live tshark decryption + pyWhat analysis."""
         start_y = 3
-        title = " Passive Credential & Secret Harvester (tshark + pyWhat)"
-        self._safe_addstr(stdscr, start_y, 1, title, curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        self._draw_section_header(stdscr, start_y, 1, w - 2, "Passive Credential & Secret Harvester (tshark + pyWhat)", COLOR_HEADER)
 
         # Controls row
         ctrl_y = start_y + 1
-        running_label = "[RUNNING]" if self.harvester_running else "[STOPPED]"
+        running_label = f"{CIRCLE_FILLED} RUNNING" if self.harvester_running else f"{CIRCLE_EMPTY} STOPPED"
         running_color = curses.color_pair(COLOR_RUNNING) if self.harvester_running else curses.color_pair(COLOR_STOPPED)
         self._safe_addstr(stdscr, ctrl_y, 1, f" Status: ", curses.color_pair(COLOR_NORMAL))
         self._safe_addstr(stdscr, ctrl_y, 10, running_label, running_color)
@@ -1600,7 +1768,7 @@ class TerminalUI:
         self._safe_addstr(stdscr, ctrl_y, 22, f" | pyWhat: {pywhat_status} | PSK: {self.harvester_psk or '<none>'} | SSID: {self.harvester_ssid or '<none>'}",
                           curses.color_pair(COLOR_WARNING))
 
-        self._safe_hline(stdscr, ctrl_y + 1, 1, curses.ACS_HLINE, w - 2)
+        self._safe_addstr(stdscr, ctrl_y + 1, 1, BOX_H * (w - 2), curses.color_pair(COLOR_DIVIDER))
 
         # Split view: top half = decrypted feed, bottom half = pyWhat findings
         content_h = h - ctrl_y - 5
@@ -1811,14 +1979,44 @@ class TerminalUI:
     # ================================================================
 
     def _draw_popup(self, stdscr, h, w):
-        """Draw a context-sensitive popup/submenu."""
+        """Draw a context-sensitive popup/submenu with double-line border."""
         popup_w = min(50, w - 4)
         popup_h = min(len(self.popup_items) + 4, h - 4)
         start_y = max(2, (h - popup_h) // 2)
         start_x = max(2, (w - popup_w) // 2)
 
-        # Draw box
-        self._draw_box(stdscr, start_y, start_x, popup_h, popup_w, self.popup_title)
+        # Draw shadow effect (dim characters offset by 1)
+        for sy in range(start_y + 1, start_y + popup_h + 1):
+            if sy < h:
+                self._safe_addstr(stdscr, sy, start_x + popup_w, " ", curses.color_pair(COLOR_NORMAL) | curses.A_DIM)
+        if start_y + popup_h < h:
+            self._safe_addstr(stdscr, start_y + popup_h, start_x + 1,
+                              " " * min(popup_w, w - start_x - 2), curses.color_pair(COLOR_NORMAL) | curses.A_DIM)
+
+        # Draw double-line box
+        try:
+            win_h, win_w = stdscr.getmaxyx()
+            if start_y + popup_h <= win_h and start_x + popup_w <= win_w:
+                # Top border (double line)
+                self._safe_addstr(stdscr, start_y, start_x,
+                                  DOUBLE_BOX_TL + DOUBLE_BOX_H * (popup_w - 2) + DOUBLE_BOX_TR,
+                                  curses.color_pair(COLOR_ACCENT))
+                # Sides (double line)
+                for i in range(1, popup_h - 1):
+                    self._safe_addstr(stdscr, start_y + i, start_x, DOUBLE_BOX_V, curses.color_pair(COLOR_ACCENT))
+                    # Clear interior
+                    self._safe_addstr(stdscr, start_y + i, start_x + 1, " " * (popup_w - 2))
+                    self._safe_addstr(stdscr, start_y + i, start_x + popup_w - 1, DOUBLE_BOX_V, curses.color_pair(COLOR_ACCENT))
+                # Bottom border (double line)
+                self._safe_addstr(stdscr, start_y + popup_h - 1, start_x,
+                                  DOUBLE_BOX_BL + DOUBLE_BOX_H * (popup_w - 2) + DOUBLE_BOX_BR,
+                                  curses.color_pair(COLOR_ACCENT))
+                # Title
+                if self.popup_title:
+                    self._safe_addstr(stdscr, start_y, start_x + 2, f" {self.popup_title} ",
+                                      curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
+        except curses.error:
+            pass
 
         # Draw items
         for i, item in enumerate(self.popup_items):
@@ -1827,9 +2025,11 @@ class TerminalUI:
             iy = start_y + 1 + i
             if i == self.popup_selected:
                 attr = curses.color_pair(COLOR_SELECTED) | curses.A_BOLD
+                prefix = f"{ARROW_RIGHT} "
             else:
                 attr = curses.color_pair(COLOR_NORMAL)
-            self._safe_addstr(stdscr, iy, start_x + 2, item[:popup_w - 4], attr)
+                prefix = "  "
+            self._safe_addstr(stdscr, iy, start_x + 2, (prefix + item)[:popup_w - 4], attr)
 
     def _draw_input(self, stdscr, h, w):
         """Draw input field overlay."""

@@ -262,7 +262,13 @@ class MultiTerminalInterface:
                 stdscr.addstr(0, (width - len(header)) // 2, header)
                 stdscr.attroff(curses.color_pair(6) | curses.A_BOLD)
                 
-                status_str = f" APs:{self.stats.get('access_points', 0)} | Clients:{self.stats.get('clients', 0)} | Creds:{self.stats.get('credentials', 0)} | EAPOL:{self.stats.get('eapol_frames', 0)} "
+                now = datetime.now().strftime("%H:%M:%S")
+                try:
+                    stdscr.addstr(0, width - len(now) - 2, now, curses.color_pair(6) | curses.A_BOLD)
+                except curses.error:
+                    pass
+
+                status_str = f" APs:{self.stats.get('access_points', 0)} \u2502 Clients:{self.stats.get('clients', 0)} \u2502 Creds:{self.stats.get('credentials', 0)} \u2502 EAPOL:{self.stats.get('eapol_frames', 0)} "
                 stdscr.attron(curses.color_pair(7))
                 stdscr.addstr(1, 0, " " * width)
                 stdscr.addstr(1, (width - len(status_str)) // 2, status_str)
@@ -290,7 +296,7 @@ class MultiTerminalInterface:
                 
                 # ── Draw Footer ──────────────────────────────────────────────
                 footer_y = height - 1
-                footer = " [Q]uit [H]elp [R]estart [S]ave Report [C]lear "
+                footer = " [Q]uit \u2502 [H]elp \u2502 [R]estart \u2502 [S]ave Report \u2502 [C]lear "
                 stdscr.attron(curses.A_REVERSE)
                 try:
                     stdscr.addstr(footer_y, 0, " " * (width - 1))
@@ -451,54 +457,69 @@ class MultiTerminalInterface:
         self.running = False
 
     def _run_plain_ui(self):
-        """Fallback plain-text UI for Windows without curses."""
-        print("\n" + "=" * 60)
-        print(" POS FRAMEWORK v2.1 - LIVE MONITOR")
-        print("=" * 60)
-        print(" Controls: Ctrl+C to stop")
-        print("=" * 60 + "\n")
-        
+        """Fallback plain-text UI for Windows without curses, with ANSI colors."""
+        # ANSI color codes
+        RESET = "\033[0m"
+        BOLD = "\033[1m"
+        DIM = "\033[2m"
+        RED = "\033[31m"
+        GREEN = "\033[32m"
+        YELLOW = "\033[33m"
+        CYAN = "\033[36m"
+        WHITE = "\033[37m"
+        BG_RED = "\033[41m"
+        BG_GREEN = "\033[42m"
+
+        print(f"\n{CYAN}{BOLD}\u2554{'═' * 58}\u2557{RESET}")
+        print(f"{CYAN}{BOLD}\u2551{' POS FRAMEWORK v2.1 - LIVE MONITOR':^58}\u2551{RESET}")
+        print(f"{CYAN}{BOLD}\u255a{'═' * 58}\u255d{RESET}")
+        print(f"{DIM} Controls: Ctrl+C to stop{RESET}")
+        print(f"{CYAN}{'─' * 60}{RESET}\n")
+
         try:
             while not self.stopped.is_set():
                 time.sleep(3)
-                
+
                 # Clear screen on Windows
                 os.system('cls' if IS_WINDOWS else 'clear')
-                
-                print("=" * 60)
-                print(" POS FRAMEWORK v2.1 - LIVE MONITOR")
-                print("=" * 60)
-                
+
+                print(f"{CYAN}{BOLD}\u250c{'─' * 58}\u2510{RESET}")
+                print(f"{CYAN}{BOLD}\u2502{' POS FRAMEWORK v2.1 - LIVE MONITOR':^58}\u2502{RESET}")
+                print(f"{CYAN}{BOLD}\u2514{'─' * 58}\u2518{RESET}")
+
                 # Status
-                print(f"\n STATUS: {'● ACTIVE' if self.running else '○ STOPPED'}")
-                print(f" Time: {datetime.now().strftime('%H:%M:%S')}")
-                
+                if self.running:
+                    print(f"\n {GREEN}{BOLD}\u25cf ACTIVE{RESET}")
+                else:
+                    print(f"\n {RED}\u25cb STOPPED{RESET}")
+                print(f" {DIM}Time: {datetime.now().strftime('%H:%M:%S')}{RESET}")
+
                 # Targets
-                print(f"\n{'─' * 60}")
-                print(" TARGETS:")
+                print(f"\n{CYAN}{'─' * 60}{RESET}")
+                print(f" {YELLOW}{BOLD}TARGETS:{RESET}")
                 if self.targets:
                     for t in self.targets:
                         if isinstance(t, dict):
-                            print(f"   → {t.get('ssid', '?')} ({t.get('bssid', '?')}) ch{t.get('channel', '?')}")
+                            print(f"   {CYAN}\u25b6{RESET} {t.get('ssid', '?')} ({t.get('bssid', '?')}) ch{t.get('channel', '?')}")
                         else:
-                            print(f"   → {t}")
+                            print(f"   {CYAN}\u25b6{RESET} {t}")
                 else:
-                    print("   (scanning...)")
-                
+                    print(f"   {DIM}(scanning...){RESET}")
+
                 # Metrics
-                print(f"\n{'─' * 60}")
-                print(" METRICS:")
-                print(f"   APs:         {self.stats.get('access_points', 0)}")
-                print(f"   POS APs:     {self.stats.get('pos_access_points', 0)}")
-                print(f"   Clients:     {self.stats.get('clients', 0)}")
-                print(f"   POS Clients: {self.stats.get('pos_clients', 0)}")
-                print(f"   Credentials: {self.stats.get('credentials', 0)}")
-                print(f"   EAPOL:       {self.stats.get('eapol_frames', 0)}")
-                print(f"   Deauths:     {self.stats.get('deauth_events', 0)}")
-                
+                print(f"\n{CYAN}{'─' * 60}{RESET}")
+                print(f" {YELLOW}{BOLD}METRICS:{RESET}")
+                print(f"   APs:         {GREEN}{self.stats.get('access_points', 0)}{RESET}")
+                print(f"   POS APs:     {GREEN}{self.stats.get('pos_access_points', 0)}{RESET}")
+                print(f"   Clients:     {CYAN}{self.stats.get('clients', 0)}{RESET}")
+                print(f"   POS Clients: {CYAN}{self.stats.get('pos_clients', 0)}{RESET}")
+                print(f"   Credentials: {YELLOW}{BOLD}{self.stats.get('credentials', 0)}{RESET}")
+                print(f"   EAPOL:       {WHITE}{self.stats.get('eapol_frames', 0)}{RESET}")
+                print(f"   Deauths:     {WHITE}{self.stats.get('deauth_events', 0)}{RESET}")
+
                 # Modules
-                print(f"\n{'─' * 60}")
-                print(" MODULES:")
+                print(f"\n{CYAN}{'─' * 60}{RESET}")
+                print(f" {YELLOW}{BOLD}MODULES:{RESET}")
                 modules = [
                     ("Recon", self.recon is not None),
                     ("Deauth", self.deauth is not None),
@@ -509,23 +530,25 @@ class MultiTerminalInterface:
                     ("Harvester", self.cred_harvester is not None),
                 ]
                 for name, active in modules:
-                    icon = "●" if active else "○"
-                    print(f"   {icon} {name}")
-                
+                    if active:
+                        print(f"   {GREEN}\u25cf{RESET} {name}")
+                    else:
+                        print(f"   {RED}\u25cb{RESET} {name}")
+
                 # Recent logs
-                print(f"\n{'─' * 60}")
-                print(" RECENT ACTIVITY:")
+                print(f"\n{CYAN}{'─' * 60}{RESET}")
+                print(f" {YELLOW}{BOLD}RECENT ACTIVITY:{RESET}")
                 recent = list(self.attack_lines)[-5:] + list(self.recon_lines)[-3:]
                 for line in recent[-8:]:
-                    print(f"   {line}")
-                
-                print(f"\n{'─' * 60}")
-                print(" [Ctrl+C to stop]")
-                
+                    print(f"   {DIM}{line}{RESET}")
+
+                print(f"\n{CYAN}{'─' * 60}{RESET}")
+                print(f" {DIM}[Ctrl+C to stop]{RESET}")
+
         except KeyboardInterrupt:
             self.stopped.set()
-            print("\n\nShutting down...")
-            
+            print(f"\n\n{YELLOW}Shutting down...{RESET}")
+
             # Generate report on exit
             try:
                 analyzer = PostAttackAnalyzer(self.db)
