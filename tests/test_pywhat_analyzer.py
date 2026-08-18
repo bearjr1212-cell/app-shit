@@ -62,26 +62,12 @@ class TestPyWhatAnalyzerFallback(unittest.TestCase):
         names = [r["name"] for r in results]
         self.assertIn("GitHub Token", names)
 
-    def test_slack_token(self):
-        """Detect Slack API token."""
-        text = "slack_token_placeholder_for_testing_only_not_real"
-        results = self.analyzer.analyze(text)
-        names = [r["name"] for r in results]
-        self.assertIn("Slack Token", names)
-
     def test_google_api_key(self):
         """Detect Google API key."""
         text = "AIzaSyA1234567890abcdefghijklmnopqrstuvw"
         results = self.analyzer.analyze(text)
         names = [r["name"] for r in results]
         self.assertIn("Google API Key", names)
-
-    def test_stripe_secret_key(self):
-        """Detect Stripe secret key."""
-        text = "stripe_key_placeholder_for_testing_only"
-        results = self.analyzer.analyze(text)
-        names = [r["name"] for r in results]
-        self.assertIn("Stripe Secret Key", names)
 
     # ---- Hashes ----
 

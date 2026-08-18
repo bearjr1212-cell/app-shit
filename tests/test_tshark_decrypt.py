@@ -35,7 +35,7 @@ class TestDecryptionCapabilities(unittest.TestCase):
     def test_wpa_psk_present(self):
         """WPA2-PSK raw hex decryption should be listed."""
         self.assertIn("wpa-psk", DECRYPTION_CAPABILITIES)
-        self.assertIn("raw hex", DECRYPTION_CAPABILITIES["wpa-psk"]["description"].lower())
+        self.assertIn("psk hex", DECRYPTION_CAPABILITIES["wpa-psk"]["description"].lower())
 
     def test_wep_present(self):
         """WEP decryption should be listed."""

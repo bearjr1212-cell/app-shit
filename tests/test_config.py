@@ -12,9 +12,9 @@ class TestConfigConstants:
     """Tests for config.py module-level constants."""
 
     def test_channels_24ghz_range(self):
-        """2.4GHz channels should be 1-14."""
+        """2.4GHz channels should be 1-13 (worldwide, excluding Japan-only ch14)."""
         from posframework.config import CHANNELS_24GHZ
-        assert CHANNELS_24GHZ == list(range(1, 15))
+        assert CHANNELS_24GHZ == list(range(1, 14))
 
     def test_channels_5ghz_populated(self):
         """5GHz channel list should contain expected channels."""
